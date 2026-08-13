@@ -1,0 +1,17 @@
+# Minimal CI image - expects pre-built stscale binary in build context
+# For local development with delve debugging, use Dockerfile.integration instead
+
+FROM debian:trixie-slim
+
+RUN apt-get --update install --no-install-recommends --yes \
+    bash ca-certificates curl dnsutils findutils iproute2 jq less procps python3 sqlite3 \
+  && apt-get dist-clean
+
+RUN mkdir -p /var/run/stealthscale
+
+# Copy pre-built stscale binary from build context
+COPY stscale /usr/local/bin/stscale
+
+ENTRYPOINT []
+EXPOSE 8080/tcp
+CMD ["/usr/local/bin/stscale"]

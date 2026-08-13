@@ -1,0 +1,58 @@
+#!/bin/sh
+# postinst script for stealthscale.
+
+set -e
+
+# Summary of how this script can be called:
+#        * <postinst> 'configure' <most-recently-configured-version>
+#        * <old-postinst> 'abort-upgrade' <new version>
+#        * <conflictor's-postinst> 'abort-remove' 'in-favour' <package>
+#          <new-version>
+#        * <postinst> 'abort-remove'
+#        * <deconfigured's-postinst> 'abort-deconfigure' 'in-favour'
+#          <failed-install-package> <version> 'removing'
+#          <conflicting-package> <version>
+# for details, see https://www.debian.org/doc/debian-policy/ or
+# the debian-policy package.
+
+STEALTHSCALE_USER="stealthscale"
+STEALTHSCALE_GROUP="stealthscale"
+STEALTHSCALE_HOME_DIR="/var/lib/stealthscale"
+STEALTHSCALE_SHELL="/usr/sbin/nologin"
+STEALTHSCALE_SERVICE="stealthscale.service"
+
+case "$1" in
+    configure)
+      groupadd --force --system "$STEALTHSCALE_GROUP"
+      if ! id -u "$STEALTHSCALE_USER" >/dev/null 2>&1; then
+        useradd --system --shell "$STEALTHSCALE_SHELL" \
+          --gid "$STEALTHSCALE_GROUP" --home-dir "$STEALTHSCALE_HOME_DIR" \
+          --comment "stealthscale default user" "$STEALTHSCALE_USER"
+      fi
+
+      # Enable service and keep track of its state
+      if deb-systemd-helper --quiet was-enabled "$STEALTHSCALE_SERVICE"; then
+        deb-systemd-helper enable "$STEALTHSCALE_SERVICE" >/dev/null || true
+      else
+        deb-systemd-helper update-state "$STEALTHSCALE_SERVICE" >/dev/null || true
+      fi
+
+      # Bounce service
+      if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null || true
+        if [ -n "$2" ]; then
+          deb-systemd-invoke restart "$STEALTHSCALE_SERVICE" >/dev/null || true
+        else
+          deb-systemd-invoke start "$STEALTHSCALE_SERVICE" >/dev/null || true
+        fi
+      fi
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+    ;;
+esac

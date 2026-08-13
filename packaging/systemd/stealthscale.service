@@ -1,0 +1,52 @@
+[Unit]
+After=network.target
+Description=stealthscale coordination server for Tailscale
+
+[Service]
+Type=simple
+User=stealthscale
+Group=stealthscale
+ExecStart=/usr/bin/stealthscale serve
+ExecReload=/usr/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+
+WorkingDirectory=/var/lib/stealthscale
+ReadWritePaths=/var/lib/stealthscale
+
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+DevicePolicy=closed
+LockPersonality=true
+MemoryDenyWriteExecute=true
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateMounts=true
+PrivateTmp=true
+ProcSubset=pid
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProtectSystem=strict
+RemoveIPC=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RuntimeDirectory=stealthscale
+RuntimeDirectoryMode=0750
+StateDirectory=stealthscale
+StateDirectoryMode=0750
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallFilter=~@resources
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
