@@ -15,6 +15,8 @@ import (
 	"github.com/tomiwebpro/stealthscale/hscontrol/assets"
 	"github.com/tomiwebpro/stealthscale/hscontrol/templates"
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
+	// webui is registered in app.go:createRouter via webui.Register (serves /web and /admin)
+	_ "github.com/tomiwebpro/stealthscale/hscontrol/webui"
 	"tailscale.com/tailcfg"
 )
 
