@@ -13,4 +13,3 @@ Create thorough documentation:
 - Keep mkdocs navigation updated
 
 This is non-code editing -> should be handled by hy3
-<!-- status: done -->

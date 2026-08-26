@@ -159,6 +159,10 @@ type Config struct {
 // XRayConfig contains configuration for the XRay/VLESS transport layer.
 // When enabled, the server replaces WireGuard with VLESS+uTLS as the
 // transport for Tailscale control plane traffic.
+//
+// Default security is "reality_xtls" (VLESS+Reality via XTLS with uTLS
+// ClientHello fingerprinting). DERP fallback is gated by stealth — it only
+// activates when stealth checks pass (fail-closed).
 type XRayConfig struct {
 	// Enabled turns on the VLESS transport listeners.
 	Enabled bool
@@ -172,15 +176,69 @@ type XRayConfig struct {
 	// MaxListenPort is the last port in the per-node allocation range.
 	MaxListenPort int
 
-	// Security is the transport security mode: "none", "tls" or "xtls".
+	// Security is the transport security mode:
+	// "none", "tls", "xtls", or "reality_xtls" (default).
+	// "reality_xtls" is VLESS+Reality via XTLS+uTLS — the stealth transport.
 	Security string
 
-	// CertFile and KeyFile are required when Security is "tls" or "xtls".
+	// CertFile and KeyFile are required when Security is "tls", "xtls" or
+	// "reality_xtls" and Reality is not using a dest-based handshake.
 	CertFile string
 	KeyFile  string
 
 	// Timeout is the connection idle timeout.
 	Timeout time.Duration
+
+	// Reality holds XTLS-Reality parameters when Security == "reality_xtls".
+	// When unset, sensible defaults are used (dest = server_url host:443).
+	Reality RealityConfig
+
+	// UTLS fingerprint to mimic (chrome, firefox, safari, randomized, etc).
+	// Only effective with reality_xtls.
+	UTLSFingerprint string
+
+	// Stealth controls DERP fallback policy.
+	Stealth StealthConfig
+}
+
+// RealityConfig holds XTLS-Reality handshake parameters.
+// Reality makes the VLESS endpoint indistinguishable from a legitimate TLS
+// site by performing a Reality handshake to a dest site.
+type RealityConfig struct {
+	// Dest is the decoy destination (e.g. "www.microsoft.com:443").
+	// If empty, derived from server_url.
+	Dest string `mapstructure:"dest"`
+
+	// ServerNames is the list of SNI values that pass Reality verification.
+	ServerNames []string `mapstructure:"server_names"`
+
+	// PrivateKey is the Reality private key (hex). If empty, auto-generated.
+	PrivateKey string `mapstructure:"private_key"`
+
+	// PublicKey is the derived public key for clients (hex, auto if empty).
+	PublicKey string `mapstructure:"public_key"`
+
+	// ShortID is the Reality short ID (hex, 0-8 bytes).
+	ShortID string `mapstructure:"short_id"`
+
+	// SpiderX is the Reality spiderX path prefix.
+	SpiderX string `mapstructure:"spider_x"`
+}
+
+// StealthConfig gates DERP fallback on stealth verification.
+// When enabled (default with reality_xtls), DERP relays are only offered
+// when the VLESS+Reality transport passes stealth checks. If stealth is
+// not satisfied, DERP fallback is suppressed (fail-closed) to avoid leaking
+// fingerprintable relay traffic.
+type StealthConfig struct {
+	// Enforce disables DERP fallback unless stealth checks pass.
+	Enforce bool `mapstructure:"enforce"`
+
+	// ProbeInterval is how often stealth probes run.
+	ProbeInterval time.Duration `mapstructure:"probe_interval"`
+
+	// ProbeTimeout is the stealth probe timeout.
+	ProbeTimeout time.Duration `mapstructure:"probe_timeout"`
 }
 
 type DNSConfig struct {

@@ -1,6 +1,6 @@
 ---
 description: StealthScale WebUI builder — implements headscale-ui style frontend embedded in server and client
-mode: subagent
+mode: primary
 model: opencode/muse-spark-1.2-contributor-free
 temperature: 0.2
 permission:

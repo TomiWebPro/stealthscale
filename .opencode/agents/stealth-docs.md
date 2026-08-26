@@ -1,6 +1,6 @@
 ---
 description: StealthScale docs writer — handles non-code tasks via hy3 (cost saving)
-mode: subagent
+mode: primary
 model: opencode/hy3-free
 temperature: 0.3
 permission:

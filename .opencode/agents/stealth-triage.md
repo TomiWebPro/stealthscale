@@ -1,6 +1,6 @@
 ---
 description: StealthScale triage agent — classifies localized file issues and decides routing (hy3 vs spark)
-mode: subagent
+mode: primary
 model: opencode/hy3-free
 temperature: 0.2
 permission:

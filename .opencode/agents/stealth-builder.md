@@ -1,6 +1,6 @@
 ---
 description: StealthScale builder — implements code changes for issues via muse-spark
-mode: subagent
+mode: primary
 model: opencode/muse-spark-1.2-contributor-free
 temperature: 0.2
 permission:
