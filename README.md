@@ -114,6 +114,7 @@ The full docs live in [`docs/`](docs/) (MkDocs):
 - [XRay/VLESS reference](docs/ref/xray-vless.md)
 - [Client modification guide](docs/client-modification.md)
 - [Configuration reference](docs/ref/configuration.md)
+- [Web UI usage](docs/usage/webui.md)
 
 ## Development
 

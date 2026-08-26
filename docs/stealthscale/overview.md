@@ -79,6 +79,26 @@ The control plane is unchanged, so all existing knowledge applies:
 - **No WireGuard keys.** Nodes are identified by their VLESS UUID/port, not
   by a WireGuard key pair.
 
+## Reality_XTLS and stealth-gated DERP
+
+StealthScale's default transport is **VLESS + Reality via XTLS + uTLS**
+(`xray.security: reality_xtls`). Reality performs a TLS handshake to a decoy
+destination (for example `www.microsoft.com:443`) so the endpoint is
+indistinguishable from a legitimate TLS site, while uTLS shapes the
+ClientHello to mimic Chrome/Firefox and defeat active probing. No certificate
+is required — the dest-based handshake provides the TLS surface.
+
+Because DERP relays are themselves fingerprintable, StealthScale **gates DERP
+fallback on stealth** (`xray.stealth.enforce: true`, the default). When the
+stealth checker determines Reality is not satisfied, the DERP map sent to
+clients is empty (fail-closed): no relay regions are advertised, so a client
+cannot leak tailnet traffic through a recognisable relay. When stealth is
+satisfied, the full DERP map is served as usual.
+
+See the [XRay/VLESS reference](../ref/xray-vless.md) for the full
+configuration, the deterministic per-node UUID/port derivation, and the
+fail-closed DERP gating algorithm.
+
 ## Naming
 
 - The server binary is built as **`stscale`** (from `./cmd/stealthscale`).
