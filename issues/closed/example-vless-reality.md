@@ -16,3 +16,5 @@ Acceptance:
 - types/config.go handles reality_xtls
 - xray/server.go supports utls + reality
 - derp/ routing checks stealth before fallback
+
+<!-- status: done -->

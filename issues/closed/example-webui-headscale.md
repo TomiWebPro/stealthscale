@@ -16,3 +16,5 @@ Acceptance:
 - `hscontrol/webui/` package with embedded frontend
 - Served at /web or /admin
 - API endpoints for management
+
+<!-- status: done -->
