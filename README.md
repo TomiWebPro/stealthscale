@@ -77,6 +77,7 @@ cp config-example.yaml /etc/stealthscale/config.yaml
 ```shell
 stscale serve --config /etc/stealthscale/config.yaml
 curl -s https://ctl.example.com/health
+curl http://127.0.0.1:8080/web   # embedded WebUI (also at /admin)
 ```
 
 ### 4. Create a user and pre-auth key

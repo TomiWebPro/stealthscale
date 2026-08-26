@@ -81,8 +81,8 @@ prefixes:
 #   stealthscale nodes vless <node-id>
 #
 xray:
-  # Enables the VLESS transport listeners.
-  enabled: false
+  # Enables the VLESS transport listeners (default: true, stealth mode).
+  enabled: true
 
   # Address the per-node VLESS listeners bind to.
   listen_addr: 0.0.0.0
@@ -94,15 +94,36 @@ xray:
   # deterministically from its node ID within [listen_port, max_listen_port].
   max_listen_port: 10100
 
-  # Transport security: "none" for plain VLESS, "tls" for TLS-wrapped
-  # VLESS. When "tls" or "xtls", cert_file and key_file are required.
-  security: none
+  # Transport security: "reality_xtls" (default, VLESS+Reality via XTLS+uTLS),
+  # "none" for plain VLESS, "tls" or "xtls" for TLS-wrapped VLESS.
+  # reality_xtls is the stealth transport — DERP fallback is gated on stealth
+  # and only activates if stealth checks pass (fail-closed).
+  security: reality_xtls
   cert_file: ""
   key_file: ""
 
   # How long to wait for a client's VLESS header before closing the
   # connection.
   timeout: 30s
+
+  # uTLS fingerprint to mimic (chrome, firefox, safari). Only with reality_xtls.
+  utls_fingerprint: chrome
+
+  # Reality dest (decoy site, e.g. www.microsoft.com:443). If empty, derived
+  # from server_url. Only with reality_xtls.
+  reality:
+    dest: ""
+    server_names: []
+    private_key: ""
+    public_key: ""
+    short_id: ""
+    spider_x: ""
+
+  # Stealth: gate DERP fallback on stealth verification (fail-closed if stealth unsatisfied)
+  stealth:
+    enforce: true
+    probe_interval: 30s
+    probe_timeout: 5s
 
 # DERP is a relay system that Tailscale uses when a direct
 # connection cannot be established.

@@ -1,66 +1,41 @@
-# Using a web UI with StealthScale
+# Web UI
 
-StealthScale itself does not ship a built-in web interface, but a number of
-community projects provide one. This page covers the practical steps to run a
-web UI in front of your `stscale` server. For the full list of available
-projects, see the [Web UI reference](../ref/integration/web-ui.md).
+StealthScale ships an embedded WebUI similar to [headscale-ui](https://github.com/gurucomputing/headscale-ui), built into both the server and client — same codebase, no duplication.
 
-## What a web UI needs
+Visit `http://<server>:8080/web` or `http://<server>:8080/admin` (alias) — works identically whether you run `stscale serve` or a client-mode binary.
 
-Every web UI is a client of the StealthScale control plane. To connect one
-you need:
+## Features
 
-- **The control API base URL** — the same `server_url` your nodes use, e.g.
-  `https://ctl.example.com`. The web UI talks to the management API, not the
-  VLESS transport.
-- **An API key** — create one with the CLI and hand it to the UI:
+- **Nodes** — hostname, IPs, tags, VLESS UUID/port
+- **Users** — names, emails, providers
+- **PreAuthKeys** — keys, reuse/ephemeral flags, expiry
+- **Policy** — current ACL/HuJSON policy
+- **DERP** — DERP map with `stealth_satisfied` and `shouldIncludeDERP` flags (fail-closed when stealth unsatisfied)
+- **VLESS** — per-node `vless://` URI, UUID, port, Reality dest
+- **Health** — machine API health, DB ping, stealth status
 
-  ```shell
-  stscale apikeys create --user <user-id>
-  ```
+Dark theme matches the scheduler WebUI (`--bg:#0b0e14;--panel:#11151f;--line:#232a3b;--acc:#5b8cff`).
 
-  The printed key is what the UI uses to authenticate against the API. Treat
-  it like a password.
-- **Network reachability** — the UI must be able to reach `server_url` over
-  HTTPS. In most deployments the UI runs behind the same reverse proxy that
-  terminates TLS for the control server.
+## API
 
-## Typical deployment
-
-A common layout is to run the web UI as a small container (or static site)
-behind your existing reverse proxy, pointing it at the control API and the
-API key you created above. Because the UI only consumes the management API,
-no VLESS ports need to be opened for it.
+All endpoints serve JSON from the live `state.State` stores and require no extra auth when accessed via the embedded UI (API-key auth is enforced at the control-plane API layer).
 
 ```
-+----------+      HTTPS       +-------------------+      +------------------+
-|  Browser | <--------------> |  Reverse proxy    | <--> |  stscale API     |
-+----------+                  +-------------------+      +------------------+
-        ^                                                          |
-        |                       +-------------------+              |
-        +---------------------- |  Web UI (static / | <------------+
-                                 |  container)       |
-                                 +-------------------+
+GET /web/api/nodes        # list nodes
+GET /web/api/users        # list users
+GET /web/api/preauthkeys  # list pre-auth keys
+GET /web/api/policy       # current policy
+GET /web/api/derp         # DERP map + stealth_satisfied flag
+GET /web/api/vless/{id}   # VLESS URI for node {id}
+GET /web/api/health       # health + stealth status
 ```
+
+`/admin/api/*` is an alias for `/web/api/*`.
+
+## Serving
+
+The UI is registered via `hscontrol/webui.Register(mux, cfg, state)` in `hscontrol/app.go:createRouter` and served by `hscontrol/webui.Handler` (Go `embed.FS` + file server). Both `stscale serve` and any client mode mount the same handler, so there is no difference in code.
 
 ## Reverse proxy and TLS
 
-Terminate TLS for both the control API and the web UI at your reverse proxy
-(recommended). See [Reverse proxy](../ref/integration/reverse-proxy.md) for
-the general pattern, and [TLS](../ref/tls.md) for the server-side options.
-
-## Choosing a UI
-
-The [Web UI reference](../ref/integration/web-ui.md) lists community projects
-ranging from full admin dashboards to minimal self-service device managers.
-Pick one that matches your deployment model (single admin vs. self-service
-users) and follow its own setup instructions, supplying the control API URL
-and API key from the steps above.
-
-!!! warning "Community contributions"
-
-    The web UIs listed in the reference are maintained by community members,
-    not by the StealthScale authors. Validate any third-party project before
-    exposing it to the Internet, and ask in the
-    [Discord server](https://discord.gg/c84AZQhmpx) "web-interfaces" channel
-    for guidance.
+Terminate TLS at your reverse proxy and forward `/web` and `/` to the StealthScale server. See [Reverse proxy](../ref/integration/reverse-proxy.md) and [TLS](../ref/tls.md).

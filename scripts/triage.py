@@ -79,11 +79,13 @@ def spawn_worker(issue_path: Path, route: str):
     if route == "hy3":
         model = "opencode/hy3-free"
         agent = "stealth-docs"
-        prompt_template = f"Process localized issue {slug} at ~/projects/stealthscale/issues/in-progress/{slug}.md using hy3 (non-code). Read the issue file, implement docs/chore as described, commit locally (git commit), append '<!-- status: done -->' when finished. Work dir: ~/projects/stealthscale"
+        prompt_template = (f"Read ~/projects/stealthscale/prompts/README.md and ~/projects/stealthscale/prompts/docs-product.md and implement docs for localized issue {slug} at ~/projects/stealthscale/issues/in-progress/{slug}.md using hy3 (non-code, cost saving). Follow prompts/docs-product.md acceptance: mkdocs, README, docs/ref/xray-vless.md, docs/usage/webui.md. Also read prompts/triage-guide.md for routing context. Work dir ~/projects/stealthscale, commit locally (git commit), append '<!-- status: done -->' when finished. DO NOT PUSH.")
     else:
         model = "opencode/muse-spark-1.2-contributor-free"
         agent = "stealth-builder"
-        prompt_template = f"Process localized issue {slug} at ~/projects/stealthscale/issues/in-progress/{slug}.md using muse-spark. Read the issue, implement the required code changes in ~/projects/stealthscale (hscontrol, xray, derp, webui, config). Run go test for affected packages, commit locally without pushing, append '<!-- status: done -->' when finished."
+        if "webui" in slug.lower():
+            agent = "stealth-webui"
+        prompt_template = (f"Read ~/projects/stealthscale/prompts/README.md and issue ~/projects/stealthscale/issues/in-progress/{slug}.md. Then read the relevant prompt(s) in ~/projects/stealthscale/prompts/: vless-reality-xtls.md (VLESS+Reality_XTLS default), derp-stealth-fallback.md (DERP gated by stealth), unified-server-client.md (single codebase), webui-headscale.md (headscale-ui style embedded), tests-config.md (tests & config). Choose the prompt(s) matching the issue labels/title (e.g. vless->vless-reality-xtls, webui->webui-headscale, docs->docs-product). Implement the required code/tests/configs as described in that prompt, with acceptance criteria. Run go test for affected packages and make build, commit locally (git commit), append '<!-- status: done -->' when finished. Work dir ~/projects/stealthscale, DO NOT PUSH (daily-push will push at 02:00 UTC). Use muse-spark intelligent.")
     # Check if job already exists
     try:
         out = subprocess.run([str(SCHED), "list"], capture_output=True, text=True, timeout=10)

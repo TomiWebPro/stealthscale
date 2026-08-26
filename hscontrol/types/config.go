@@ -572,12 +572,16 @@ func LoadConfig(path string, isFile bool) error {
 	viper.SetDefault("node.routes.ha.probe_interval", "10s")
 	viper.SetDefault("node.routes.ha.probe_timeout", "5s")
 
-	viper.SetDefault("xray.enabled", false)
+	viper.SetDefault("xray.enabled", true)
 	viper.SetDefault("xray.listen_addr", "0.0.0.0")
 	viper.SetDefault("xray.listen_port", 10001)
 	viper.SetDefault("xray.max_listen_port", 10100)
-	viper.SetDefault("xray.security", "none")
+	viper.SetDefault("xray.security", "reality_xtls")
 	viper.SetDefault("xray.timeout", "30s")
+	viper.SetDefault("xray.utls_fingerprint", "chrome")
+	viper.SetDefault("xray.stealth.enforce", true)
+	viper.SetDefault("xray.stealth.probe_interval", "30s")
+	viper.SetDefault("xray.stealth.probe_timeout", "5s")
 
 	viper.SetDefault("tuning.notifier_send_timeout", "800ms")
 	viper.SetDefault("tuning.batch_change_delay", "800ms")
@@ -723,12 +727,20 @@ func validateServerConfig() error {
 			errorText += "Fatal config error: xray.listen_port must be a valid port and xray.max_listen_port must be greater than or equal to it and at most 65535\n"
 		}
 		security := viper.GetString("xray.security")
-		if security != "none" && security != "tls" && security != "xtls" {
-			errorText += "Fatal config error: the only supported values for xray.security are none, tls and xtls\n"
+		if security != "none" && security != "tls" && security != "xtls" && security != "reality_xtls" && security != "reality" {
+			errorText += "Fatal config error: the only supported values for xray.security are none, tls, xtls, reality_xtls (default) and reality\n"
+		}
+		// Normalize alias
+		if security == "reality" {
+			security = "reality_xtls"
 		}
 		if (security == "tls" || security == "xtls") &&
 			(viper.GetString("xray.cert_file") == "" || viper.GetString("xray.key_file") == "") {
 			errorText += "Fatal config error: xray.cert_file and xray.key_file are required when xray.security is tls or xtls\n"
+		}
+		// reality_xtls does NOT require cert_file/key_file — it uses Reality dest dial
+		if security == "reality_xtls" {
+			// Optional dest validation, but allow empty (auto-derived from server_url)
 		}
 	}
 
@@ -1407,10 +1419,30 @@ func LoadServerConfig() (*Config, error) {
 			ListenAddr:     viper.GetString("xray.listen_addr"),
 			BaseListenPort: viper.GetInt("xray.listen_port"),
 			MaxListenPort:  viper.GetInt("xray.max_listen_port"),
-			Security:       viper.GetString("xray.security"),
-			CertFile:       viper.GetString("xray.cert_file"),
-			KeyFile:        viper.GetString("xray.key_file"),
-			Timeout:        viper.GetDuration("xray.timeout"),
+			Security: func() string {
+				s := viper.GetString("xray.security")
+				if s == "reality" {
+					return "reality_xtls"
+				}
+				return s
+			}(),
+			CertFile:        viper.GetString("xray.cert_file"),
+			KeyFile:         viper.GetString("xray.key_file"),
+			Timeout:         viper.GetDuration("xray.timeout"),
+			UTLSFingerprint: viper.GetString("xray.utls_fingerprint"),
+			Reality: RealityConfig{
+				Dest:        viper.GetString("xray.reality.dest"),
+				ServerNames: viper.GetStringSlice("xray.reality.server_names"),
+				PrivateKey:  viper.GetString("xray.reality.private_key"),
+				PublicKey:   viper.GetString("xray.reality.public_key"),
+				ShortID:     viper.GetString("xray.reality.short_id"),
+				SpiderX:     viper.GetString("xray.reality.spider_x"),
+			},
+			Stealth: StealthConfig{
+				Enforce:       viper.GetBool("xray.stealth.enforce"),
+				ProbeInterval: viper.GetDuration("xray.stealth.probe_interval"),
+				ProbeTimeout:  viper.GetDuration("xray.stealth.probe_timeout"),
+			},
 		},
 
 		CLI: CLIConfig{

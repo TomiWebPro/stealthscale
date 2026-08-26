@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StealthScale — Control Console</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="logo">SS</div>
+  <h1>StealthScale</h1>
+  <span class="sub">Control Console</span>
+  <span class="live"><span class="dot"></span> live</span>
+  <span id="clock" class="mono dim"></span>
+</header>
+<nav class="tabs">
+  <button class="on" data-tab="nodes" onclick="setTab('nodes')">Nodes</button>
+  <button data-tab="users" onclick="setTab('users')">Users</button>
+  <button data-tab="keys" onclick="setTab('keys')">PreAuth Keys</button>
+  <button data-tab="policy" onclick="setTab('policy')">Policy</button>
+  <button data-tab="derp" onclick="setTab('derp')">DERP</button>
+  <button data-tab="vless" onclick="setTab('vless')">VLESS</button>
+  <button data-tab="health" onclick="setTab('health')">Health</button>
+</nav>
+<main>
+  <section id="tab-nodes" class="view on">
+    <div class="toolbar">
+      <button onclick="loadNodes()">Refresh</button>
+      <span class="dim mono" id="nodes-count"></span>
+    </div>
+    <div class="card"><table><thead><tr><th>ID</th><th>Hostname</th><th>User</th><th>IPs</th><th>Tags</th><th>VLESS</th></tr></thead><tbody id="nodesBody"></tbody></table></div>
+  </section>
+  <section id="tab-users" class="view">
+    <div class="toolbar"><button onclick="loadUsers()">Refresh</button></div>
+    <div class="card"><table><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Provider</th></tr></thead><tbody id="usersBody"></tbody></table></div>
+  </section>
+  <section id="tab-keys" class="view">
+    <div class="toolbar"><button onclick="loadKeys()">Refresh</button></div>
+    <div class="card"><table><thead><tr><th>ID</th><th>Key</th><th>User</th><th>Reusable</th><th>Used</th><th>Expiry</th></tr></thead><tbody id="keysBody"></tbody></table></div>
+  </section>
+  <section id="tab-policy" class="view">
+    <div class="toolbar"><button onclick="loadPolicy()">Refresh</button></div>
+    <div class="card"><pre id="policyBody" class="pre"></pre></div>
+  </section>
+  <section id="tab-derp" class="view">
+    <div class="toolbar"><button onclick="loadDERP()">Refresh</button></div>
+    <div class="card"><pre id="derpBody" class="pre"></pre></div>
+    <div id="derpStatus" class="pill-row"></div>
+  </section>
+  <section id="tab-vless" class="view">
+    <div class="toolbar">
+      <input id="vlessId" placeholder="Node ID (e.g. 1)" style="max-width:180px">
+      <button onclick="loadVLESS()">Fetch VLESS URI</button>
+    </div>
+    <div class="card"><pre id="vlessBody" class="pre">Enter a node ID to fetch its VLESS endpoint.</pre></div>
+  </section>
+  <section id="tab-health" class="view">
+    <div class="toolbar"><button onclick="loadHealth()">Refresh</button></div>
+    <div class="card"><pre id="healthBody" class="pre"></pre></div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

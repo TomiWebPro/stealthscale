@@ -1,199 +1,128 @@
-# XRay/VLESS transport
+# XRay / VLESS Reference (VLESS+Reality_XTLS)
 
-This is the reference for the VLESS transport added by StealthScale. It
-replaces WireGuard as the transport for the Tailscale control protocol.
+StealthScale replaces WireGuard with **VLESS+Reality via XTLS+uTLS** as the stealth transport. This document is the reference for config, URI, and stealth-gated DERP fallback.
 
-## Configuration
-
-See [Install & deploy](../stealthscale/install.md) for a full walkthrough. The
-relevant `config.yaml` section:
+## Defaults (Stealth)
 
 ```yaml
 xray:
-  enabled: true         # master switch for the VLESS listeners (default true)
-  listen_addr: 0.0.0.0  # address the per-node listeners bind to
-  listen_port: 10001    # first port in the per-node range
-  max_listen_port: 10100 # last port in the per-node range
-  security: reality_xtls # "none", "tls", "xtls" or "reality_xtls" (default)
-  cert_file: ""         # optional with reality_xtls; required for tls/xtls
-  key_file: ""          # optional with reality_xtls; required for tls/xtls
-  timeout: 30s          # VLESS header read timeout
-  reality:              # only used when security == "reality_xtls"
-    dest: ""            # decoy destination, e.g. "www.microsoft.com:443"
-    server_names: []    # SNI values that pass Reality verification
-    private_key: ""     # Reality private key (hex); auto-generated if empty
-    public_key: ""      # Reality public key (hex); auto-derived if empty
-    short_id: ""        # Reality short ID (hex, 0-8 bytes)
-    spider_x: ""        # Reality spiderX path prefix
-  utls_fingerprint: chrome # uTLS ClientHello to mimic (chrome, firefox, ...)
-  stealth:              # DERP fallback gating (default with reality_xtls)
-    enforce: true       # only offer DERP when stealth checks pass (fail-closed)
+  enabled: true
+  listen_addr: 0.0.0.0
+  listen_port: 10001
+  max_listen_port: 10100
+  security: reality_xtls   # VLESS+Reality via XTLS+uTLS (default)
+  cert_file: ""
+  key_file: ""
+  timeout: 30s
+  utls_fingerprint: chrome # chrome, firefox, safari, randomized
+  reality:
+    dest: ""               # decoy dest, e.g. www.microsoft.com:443; empty => derived from server_url
+    server_names: []       # SNI list for Reality
+    private_key: ""        # hex, auto if empty
+    public_key: ""         # hex, derived
+    short_id: ""           # hex 0-8 bytes
+    spider_x: ""           # spiderX prefix
+  stealth:
+    enforce: true          # gate DERP fallback on stealth (fail-closed)
     probe_interval: 30s
     probe_timeout: 5s
 ```
 
-### Validation rules
+Alternatives: `security: none` (plain VLESS), `tls`, `xtls` (require `cert_file`/`key_file`). `reality` is alias for `reality_xtls`.
 
-- `listen_port` must be greater than zero; `max_listen_port` must be greater
-  than or equal to `listen_port` (a degenerate range collapses to a single
-  port).
-- `security` accepts `none`, `tls`, `xtls`, `reality_xtls`, or the alias
-  `reality` (normalised to `reality_xtls`). The default is `reality_xtls`.
-- For `tls`/`xtls`, both `cert_file` and `key_file` must be set. For
-  `reality_xtls` they are **optional**: when omitted, the server performs a
-  Reality handshake to `reality.dest` instead of presenting a local
-  certificate.
-- `timeout` defaults to `30s` when omitted.
-- `utls_fingerprint` defaults to `chrome` and is only meaningful with
-  `reality_xtls`.
+## Why Reality_XTLS
 
-## Per-node endpoints
+- **VLESS**: lightweight proxying, looks like TLS.
+- **Reality**: dest-based handshake to decoy site — endpoint indistinguishable from legitimate TLS site.
+- **uTLS**: ClientHello fingerprint mimics Chrome/Firefox, defeating active probing.
+- **XTLS**: `xtls-rprx-vision` flow for high-performance.
 
-Every registered node gets a dedicated listener. Both the UUID and the port
-are **deterministic functions of the node ID**, so they never change across
-restarts.
+Together, node traffic is not fingerprintable as Tailscale.
 
-### UUID
+## Deterministic Per-Node Endpoints
 
-```
-UUID = UUIDv5(namespace = "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-              name     = "stealthscale:<node-id>")
+Every registered node gets its own VLESS listener on a deterministic port + UUID:
+
+```go
+uuid = UUIDv5("6ba7b810-9dad-11d1-80b4-00c04fd430c8", "stealthscale:<nodeID>")
+port = base + hash("stealthscale-port:<nodeID>") % (max-min+1)
 ```
 
-### Port
+- `hscontrol/xray/vless.go:103` `NodeUUID()`
+- `hscontrol/xray/vless.go:110` `NodePort()`
+- Never changes across restarts → static client config.
+- Fetch: `stscale nodes vless <node-id>` or `GET /web/api/vless/{id}`.
+
+Example URI (reality_xtls):
 
 ```
-port = listen_port + sha256("stealthscale-port:<node-id>")[0:8] % (max_listen_port - listen_port + 1)
+vless://a1b2c3d4-...@192.0.2.1:10443?security=reality_xtls&fp=chrome&type=tcp&flow=xtls-rprx-vision
 ```
 
-### Endpoint format
+- `security=reality_xtls` indicates Reality dest + uTLS.
+- `fp=chrome` is `utls_fingerprint`.
+- `flow=xtls-rprx-vision` is XTLS vision flow.
 
-The CLI prints the endpoint for a node:
+For `none`, `tls`, `xtls`, URI is `vless://<uuid>@<addr>:<port>?security=<mode>` (no fp/flow).
 
-```shell
-stscale nodes vless <node-id>
+## Stealth-Gated DERP Fallback (Fail-Closed)
+
+DERP relays are fingerprintable; stealth mode gates them.
+
+- Checker: `hscontrol/stealth/stealth.go` `Checker.IsSatisfied()`
+- If `xray.enabled && xray.security==reality_xtls && xray.stealth.enforce && !IsSatisfied()` → `FilterDERPMap()` returns empty `Regions: map[int]*DERPRegion{}`.
+- Then `h.state.SetDERPMap(filtered)` in `hscontrol/app.go` (both initial load and periodic ticker).
+- Netmap sent to clients has **no DERP regions** → clients fail-closed, no relay fallback leaks.
+
+When stealth satisfied, DERPMap is complete as usual (`derp.GetDERPMap` merged + shuffled).
+
+Verify:
+```bash
+go test ./hscontrol/stealth -v
+curl -s http://127.0.0.1:8080/web/api/derp | jq .stealth_satisfied
 ```
 
+See prompt `prompts/derp-stealth-fallback.md`.
+
+## Server + Client Unified
+
+No code difference: both import `hscontrol/xray`:
+
+- Server: `hscontrol/xray_server.go:StartXRayServer` calls `xray.NewServer(&cfg.XRay, handler)` and `EnsureNodeListener`.
+- Client: `hscontrol/xray/client.go` `DialVLESS(ctx, cfg, utlsFingerprint)` writes VLESS header and awaits version byte.
+
+Same `XRayConfig`, same `VLESSConfig.URI()`. Single binary `stscale` can serve or dial.
+
+See `prompts/unified-server-client.md`.
+
+## Config Validation
+
+`hscontrol/types/config.go:723` validates:
+
+- `xray.listen_port`/`max_listen_port` sane
+- `security` in `none,tls,xtls,reality_xtls,reality`
+- `tls`/`xtls` require `cert_file`+`key_file`; `reality_xtls` does NOT.
+- Defaults set via `viper.SetDefault` to `enabled:true`, `security:reality_xtls`, `utls:chrome`, `stealth.enforce:true`.
+
+## Tests
+
+Coders: see `prompts/tests-config.md` and `prompts/vless-reality-xtls.md`.
+
+```bash
+go test ./hscontrol/xray -v
+go test ./hscontrol/stealth -v
+go test ./hscontrol/types -run TestXRay -v
+make test
 ```
-Field    | Value
-ID       | 9f4d4f6c-d1e2-4a3b-9c8d-7a6b5c4d3e2f
-Address  | 10.0.0.5
-Port     | 10042
-Security | none
-URI      | vless://9f4d4f6c-d1e2-4a3b-9c8d-7a6b5c4d3e2f@10.0.0.5:10042?security=none
-```
 
-Use `-o json` (or `--output json`) to get the machine-readable form:
+## WebUI
 
-```json
-{
-    "address": "10.0.0.5",
-    "id": "9f4d4f6c-d1e2-4a3b-9c8d-7a6b5c4d3e2f",
-    "port": 10042,
-    "security": "none",
-    "uri": "vless://9f4d4f6c-d1e2-4a3b-9c8d-7a6b5c4d3e2f@10.0.0.5:10042?security=none"
-}
-```
+VLESS tab shows per-node URI/port/UUID, DERP tab shows stealth badge. See `docs/usage/webui.md` and `prompts/webui-headscale.md`.
 
-The URI follows the standard VLESS URI form:
-`vless://<uuid>@<address>:<port>?security=<security>`.
+## References
 
-## Wire protocol
-
-### VLESS header (client → server)
-
-After the TCP (or TLS/XTLS) connection is established, the client sends:
-
-| Field         | Length   | Value                                       |
-| ------------- | -------- | ------------------------------------------- |
-| Version       | 1 byte   | `0x00`                                      |
-| UUID          | 16 bytes | The node's deterministic UUID (binary form) |
-| Addons length | 1 byte   | `0x00` (no addons)                          |
-| Addons        | n bytes  | Optional; parsed and discarded              |
-
-### Version response (server → client)
-
-If the UUID matches the node the listener belongs to, the server replies
-with a single byte: the VLESS version (`0x00`). On mismatch or a malformed
-header, the server closes the connection **without** sending the version
-byte.
-
-### Application payload
-
-After the VLESS handshake, the raw stream is the Tailscale control protocol:
-
-1. **Noise handshake** (`controlbase.Server`/`Client`) — the standard TS2021
-   noise key agreement.
-1. **HTTP/2 machine API** over the noise connection — registration, map/poll,
-   SSH actions (`/machine/register`, `/machine/map`, `/machine/ssh/...`).
-
-The server consumes the VLESS header, then treats the stream as a normal
-noise connection. No VLESS framing is applied to the payload itself.
-
-## Security modes
-
-| Mode           | Behaviour                                                                                                                                                |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `none`         | Plain VLESS over TCP. The connection itself is not TLS-wrapped; stealth relies on the noise handshake and the traffic being unrecognisable as Tailscale. |
-| `tls`          | The VLESS handshake runs inside a TLS connection (`tls.Server`). Combined with a real certificate, the stream is indistinguishable from HTTPS.           |
-| `xtls`         | XTLS-style TLS wrapping (accepted for compatibility with Xray clients; behaves like `tls` in the current implementation).                                |
-| `reality_xtls` | **Default.** VLESS + XTLS-Reality with a uTLS ClientHello. The endpoint mimics a legitimate TLS site via a Reality handshake to `reality.dest`, so no local certificate is required and the traffic is indistinguishable from HTTPS to a network observer. `reality` is an accepted alias. |
-
-### Reality (XTLS-Reality)
-
-`reality_xtls` is the stealth transport. Instead of presenting your own
-certificate, the server performs a Reality handshake that makes the VLESS
-endpoint look like a normal TLS connection to a decoy site.
-
-- `reality.dest` — the decoy destination (e.g. `www.microsoft.com:443`). If
-  empty, it is derived from `server_url`.
-- `reality.server_names` — the list of SNI values that pass Reality
-  verification. If empty, the server's hostname is used.
-- `reality.private_key` / `reality.public_key` — the Reality keypair (hex).
-  Both are auto-generated if left empty; the public key is what clients need
-  to verify the handshake.
-- `reality.short_id` — the Reality short ID (hex, 0–8 bytes), used to
-  distinguish multiple servers behind one dest.
-- `reality.spider_x` — the Reality `spiderX` path prefix.
-
-You may still supply `cert_file` / `key_file` with `reality_xtls` to present
-a local certificate instead of using the dest-based handshake.
-
-### uTLS fingerprint
-
-`utls_fingerprint` selects the ClientHello shape the server expects from
-patched clients (and, on the client side, the shape the client presents).
-Defaults to `chrome`; other useful values are `firefox`, `safari`, and
-`randomized`. It is only effective with `reality_xtls`.
-
-### Stealth and DERP fallback
-
-When `stealth.enforce` is `true` (the default with `reality_xtls`), DERP
-relays are only advertised to clients once the VLESS+Reality transport has
-passed stealth verification. If stealth checks fail, DERP fallback is
-suppressed (fail-closed) so the tailnet does not leak fingerprintable relay
-traffic. `stealth.probe_interval` and `stealth.probe_timeout` control how
-often and how long stealth probes run.
-
-## Operational notes
-
-- **Firewall**: open the whole `listen_port` … `max_listen_port` TCP range,
-  since per-node ports are assigned from it and clients connect to exactly
-  one port each.
-- **Listeners lifecycle**: listeners are started for all existing nodes at
-  server startup and for newly registered nodes at registration time
-  (idempotent — starting an already-running listener is a no-op). They are
-  shut down with the server.
-- **Concurrency**: each accepted connection is handled in its own goroutine;
-  the noise handshake and machine API are served until the connection
-  closes.
-
-## Implementation
-
-- `hscontrol/xray/` — VLESS protocol (`vless.go`) and the per-node listener
-  server (`server.go`).
-- `hscontrol/xray_server.go` — wiring into the `StealthScale` server: boots
-  listeners at startup and ensures a listener exists when a node registers.
-- `hscontrol/noise.go` — `serveNoise`/`noiseRouter`, shared by both the
-  legacy `/ts2021` path and the VLESS path.
-- `cmd/stealthscale/cli/nodes.go` — the `nodes vless` command.
+- `hscontrol/xray/server.go`
+- `hscontrol/xray/vless.go`
+- `hscontrol/stealth/stealth.go`
+- `hscontrol/types/config.go:159` XRayConfig
+- `hscontrol/app.go:372` DERPMap updates

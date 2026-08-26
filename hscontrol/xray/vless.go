@@ -72,9 +72,13 @@ func (c *VLESSConfig) Validate() error {
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("invalid port: %d", c.Port)
 	}
-	switch c.Security {
-	case "none", "tls", "xtls":
-		// Valid
+	sec := c.Security
+	if sec == "reality" {
+		sec = "reality_xtls"
+	}
+	switch sec {
+	case "none", "tls", "xtls", "reality_xtls":
+		// Valid — reality_xtls is the default stealth mode
 	default:
 		return fmt.Errorf("invalid security mode: %s", c.Security)
 	}
@@ -84,8 +88,23 @@ func (c *VLESSConfig) Validate() error {
 // URI returns the URI form of the VLESS endpoint, e.g.
 // vless://<uuid>@<address>:<port>?security=<security>, suitable for
 // distribution to clients.
+// For reality_xtls, the URI includes reality parameters so a patched client
+// can perform the Reality handshake with uTLS.
 func (c *VLESSConfig) URI() string {
-	return fmt.Sprintf("vless://%s@%s:%d?security=%s", c.ID, c.Address, c.Port, c.Security)
+	// Default to reality_xtls for stealth; callers with Security=="none" get legacy
+	sec := c.Security
+	if sec == "" {
+		sec = "reality_xtls"
+	}
+	if sec == "reality" {
+		sec = "reality_xtls"
+	}
+	base := fmt.Sprintf("vless://%s@%s:%d?security=%s", c.ID, c.Address, c.Port, sec)
+	if sec == "reality_xtls" {
+		// Append uTLS fingerprint and reality hints for client
+		base += "&fp=chrome&type=tcp&flow=xtls-rprx-vision"
+	}
+	return base
 }
 
 // ToJSON serializes the VLESS configuration to JSON.

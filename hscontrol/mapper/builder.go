@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/tomiwebpro/stealthscale/hscontrol/derp"
 	"github.com/tomiwebpro/stealthscale/hscontrol/policy"
 	policyv2 "github.com/tomiwebpro/stealthscale/hscontrol/policy/v2"
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
@@ -117,8 +118,22 @@ func (b *MapResponseBuilder) WithDebugType(t debugType) *MapResponseBuilder {
 	return b
 }
 
-// WithDERPMap adds the DERP map to the response.
+// WithDERPMap adds the DERP map to the response, gated by stealth verification.
+// When XRay stealth enforcement is enabled (default with reality_xtls), DERP
+// relays are only offered when IsStealthSatisfied returns true. Otherwise the
+// response carries an empty DERPMap (fail-closed) to avoid leaking
+// fingerprintable relay traffic.
 func (b *MapResponseBuilder) WithDERPMap() *MapResponseBuilder {
+	if b.mapper.cfg != nil && !derp.ShouldIncludeDERP(b.mapper.cfg) {
+		b.resp.DERPMap = &tailcfg.DERPMap{
+			Regions: map[int]*tailcfg.DERPRegion{},
+		}
+		log.Debug().
+			Uint64("node_id", uint64(b.nodeID)).
+			Str("xray_security", b.mapper.cfg.XRay.Security).
+			Msg("derp: stealth not satisfied — suppressing DERPMap (fail-closed)")
+		return b
+	}
 	b.resp.DERPMap = b.mapper.state.DERPMap().AsStruct()
 	return b
 }

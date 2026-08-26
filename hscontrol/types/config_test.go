@@ -50,7 +50,7 @@ func TestReadConfig(t *testing.T) {
 					},
 					Split: map[string][]string{
 						"darp.stealthscale.net": {"1.1.1.1", "8.8.8.8"},
-						"foo.bar.com":        {"1.1.1.1"},
+						"foo.bar.com":           {"1.1.1.1"},
 					},
 				},
 				ExtraRecords: []tailcfg.DNSRecord{
@@ -83,7 +83,7 @@ func TestReadConfig(t *testing.T) {
 				},
 				Routes: map[string][]*dnstype.Resolver{
 					"darp.stealthscale.net": {{Addr: "1.1.1.1"}, {Addr: "8.8.8.8"}},
-					"foo.bar.com":        {{Addr: "1.1.1.1"}},
+					"foo.bar.com":           {{Addr: "1.1.1.1"}},
 				},
 				ExtraRecords: []tailcfg.DNSRecord{
 					{Name: "grafana.myvpn.example.com", Type: "A", Value: "100.64.0.3"},
@@ -116,7 +116,7 @@ func TestReadConfig(t *testing.T) {
 					},
 					Split: map[string][]string{
 						"darp.stealthscale.net": {"1.1.1.1", "8.8.8.8"},
-						"foo.bar.com":        {"1.1.1.1"},
+						"foo.bar.com":           {"1.1.1.1"},
 					},
 				},
 				ExtraRecords: []tailcfg.DNSRecord{
@@ -149,7 +149,7 @@ func TestReadConfig(t *testing.T) {
 				},
 				Routes: map[string][]*dnstype.Resolver{
 					"darp.stealthscale.net": {{Addr: "1.1.1.1"}, {Addr: "8.8.8.8"}},
-					"foo.bar.com":        {{Addr: "1.1.1.1"}},
+					"foo.bar.com":           {{Addr: "1.1.1.1"}},
 				},
 				ExtraRecords: []tailcfg.DNSRecord{
 					{Name: "grafana.myvpn.example.com", Type: "A", Value: "100.64.0.3"},
@@ -624,7 +624,7 @@ func TestSafeServerURLWithPort(t *testing.T) {
 func TestConfigJSONOmitsSecrets(t *testing.T) {
 	const (
 		secretPostgresPass = "p0stgres-secret-marker"
-		secretClientSecret = "oidc-client-secret-marker"    //nolint:gosec // test marker, not a real credential
+		secretClientSecret = "oidc-client-secret-marker"       //nolint:gosec // test marker, not a real credential
 		secretAPIKey       = "stealthscale-cli-api-key-marker" //nolint:gosec // test marker, not a real credential
 	)
 

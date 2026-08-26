@@ -39,6 +39,7 @@ import (
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
 	"github.com/tomiwebpro/stealthscale/hscontrol/types/change"
 	"github.com/tomiwebpro/stealthscale/hscontrol/util"
+	"github.com/tomiwebpro/stealthscale/hscontrol/webui"
 	"github.com/tomiwebpro/stealthscale/hscontrol/xray"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
@@ -509,6 +510,10 @@ func (h *StealthScale) createRouter(apiV1Mux, apiV2Mux http.Handler) *chi.Mux {
 
 	r.Get("/favicon.ico", FaviconHandler)
 	r.Get("/", BlankHandler)
+
+	// Embedded WebUI (headscale-ui style) — same codebase for server and client.
+	// Served at /web and /admin (alias).
+	webui.Register(r, h.cfg, h.state)
 
 	return r
 }
