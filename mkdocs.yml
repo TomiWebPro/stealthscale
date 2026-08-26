@@ -183,6 +183,7 @@ nav:
       - Upgrade: setup/upgrade.md
   - Usage:
       - Getting started: usage/getting-started.md
+      - Web UI: usage/webui.md
       - Connect a node:
           - Android: usage/connect/android.md
           - Apple: usage/connect/apple.md

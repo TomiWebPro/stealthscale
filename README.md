@@ -64,9 +64,10 @@ make build     # produces ./stscale
 
 ```shell
 cp config-example.yaml /etc/stealthscale/config.yaml
-# set server_url, then enable the VLESS transport:
+# set server_url, then enable the VLESS transport (reality_xtls is the default):
 #   xray:
 #     enabled: true
+#     security: reality_xtls
 #     listen_port: 10001
 #     max_listen_port: 10100
 ```
@@ -93,7 +94,7 @@ On the client:
 tailscale up \
   --login-server https://ctl.example.com \
   --authkey <pre-auth-key> \
-  --vless-uri 'vless://<uuid>@<addr>:<port>?security=none'
+  --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls'
 ```
 
 Fetch the `vless://` URI for a node on the server:

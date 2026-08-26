@@ -10,14 +10,26 @@ relevant `config.yaml` section:
 
 ```yaml
 xray:
-  enabled: false        # master switch for the VLESS listeners
+  enabled: true         # master switch for the VLESS listeners (default true)
   listen_addr: 0.0.0.0  # address the per-node listeners bind to
   listen_port: 10001    # first port in the per-node range
   max_listen_port: 10100 # last port in the per-node range
-  security: none        # "none", "tls" or "xtls"
-  cert_file: ""         # required when security is "tls"/"xtls"
-  key_file: ""          # required when security is "tls"/"xtls"
+  security: reality_xtls # "none", "tls", "xtls" or "reality_xtls" (default)
+  cert_file: ""         # optional with reality_xtls; required for tls/xtls
+  key_file: ""          # optional with reality_xtls; required for tls/xtls
   timeout: 30s          # VLESS header read timeout
+  reality:              # only used when security == "reality_xtls"
+    dest: ""            # decoy destination, e.g. "www.microsoft.com:443"
+    server_names: []    # SNI values that pass Reality verification
+    private_key: ""     # Reality private key (hex); auto-generated if empty
+    public_key: ""      # Reality public key (hex); auto-derived if empty
+    short_id: ""        # Reality short ID (hex, 0-8 bytes)
+    spider_x: ""        # Reality spiderX path prefix
+  utls_fingerprint: chrome # uTLS ClientHello to mimic (chrome, firefox, ...)
+  stealth:              # DERP fallback gating (default with reality_xtls)
+    enforce: true       # only offer DERP when stealth checks pass (fail-closed)
+    probe_interval: 30s
+    probe_timeout: 5s
 ```
 
 ### Validation rules
@@ -25,9 +37,15 @@ xray:
 - `listen_port` must be greater than zero; `max_listen_port` must be greater
   than or equal to `listen_port` (a degenerate range collapses to a single
   port).
-- `security` accepts only `none`, `tls`, or `xtls`.
-- For `tls`/`xtls`, both `cert_file` and `key_file` must be set.
+- `security` accepts `none`, `tls`, `xtls`, `reality_xtls`, or the alias
+  `reality` (normalised to `reality_xtls`). The default is `reality_xtls`.
+- For `tls`/`xtls`, both `cert_file` and `key_file` must be set. For
+  `reality_xtls` they are **optional**: when omitted, the server performs a
+  Reality handshake to `reality.dest` instead of presenting a local
+  certificate.
 - `timeout` defaults to `30s` when omitted.
+- `utls_fingerprint` defaults to `chrome` and is only meaningful with
+  `reality_xtls`.
 
 ## Per-node endpoints
 
@@ -114,11 +132,48 @@ noise connection. No VLESS framing is applied to the payload itself.
 
 ## Security modes
 
-| Mode   | Behaviour                                                                                                                                                |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `none` | Plain VLESS over TCP. The connection itself is not TLS-wrapped; stealth relies on the noise handshake and the traffic being unrecognisable as Tailscale. |
-| `tls`  | The VLESS handshake runs inside a TLS connection (`tls.Server`). Combined with a real certificate, the stream is indistinguishable from HTTPS.           |
-| `xtls` | XTLS-style TLS wrapping (accepted for compatibility with Xray clients; behaves like `tls` in the current implementation).                                |
+| Mode           | Behaviour                                                                                                                                                |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `none`         | Plain VLESS over TCP. The connection itself is not TLS-wrapped; stealth relies on the noise handshake and the traffic being unrecognisable as Tailscale. |
+| `tls`          | The VLESS handshake runs inside a TLS connection (`tls.Server`). Combined with a real certificate, the stream is indistinguishable from HTTPS.           |
+| `xtls`         | XTLS-style TLS wrapping (accepted for compatibility with Xray clients; behaves like `tls` in the current implementation).                                |
+| `reality_xtls` | **Default.** VLESS + XTLS-Reality with a uTLS ClientHello. The endpoint mimics a legitimate TLS site via a Reality handshake to `reality.dest`, so no local certificate is required and the traffic is indistinguishable from HTTPS to a network observer. `reality` is an accepted alias. |
+
+### Reality (XTLS-Reality)
+
+`reality_xtls` is the stealth transport. Instead of presenting your own
+certificate, the server performs a Reality handshake that makes the VLESS
+endpoint look like a normal TLS connection to a decoy site.
+
+- `reality.dest` — the decoy destination (e.g. `www.microsoft.com:443`). If
+  empty, it is derived from `server_url`.
+- `reality.server_names` — the list of SNI values that pass Reality
+  verification. If empty, the server's hostname is used.
+- `reality.private_key` / `reality.public_key` — the Reality keypair (hex).
+  Both are auto-generated if left empty; the public key is what clients need
+  to verify the handshake.
+- `reality.short_id` — the Reality short ID (hex, 0–8 bytes), used to
+  distinguish multiple servers behind one dest.
+- `reality.spider_x` — the Reality `spiderX` path prefix.
+
+You may still supply `cert_file` / `key_file` with `reality_xtls` to present
+a local certificate instead of using the dest-based handshake.
+
+### uTLS fingerprint
+
+`utls_fingerprint` selects the ClientHello shape the server expects from
+patched clients (and, on the client side, the shape the client presents).
+Defaults to `chrome`; other useful values are `firefox`, `safari`, and
+`randomized`. It is only effective with `reality_xtls`.
+
+### Stealth and DERP fallback
+
+When `stealth.enforce` is `true` (the default with `reality_xtls`), DERP
+relays are only advertised to clients once the VLESS+Reality transport has
+passed stealth verification. If stealth checks fail, DERP fallback is
+suppressed (fail-closed) so the tailnet does not leak fingerprintable relay
+traffic. `stealth.probe_interval` and `stealth.probe_timeout` control how
+often and how long stealth probes run.
 
 ## Operational notes
 

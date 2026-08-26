@@ -54,11 +54,14 @@ Minimal settings to change:
 
 ### Enabling the VLESS transport
 
-The xray section controls the stealth transport:
+The `xray` section controls the stealth transport. The default (and
+recommended) security mode is `reality_xtls` — VLESS + XTLS-Reality with a
+uTLS ClientHello, which makes every node endpoint indistinguishable from a
+legitimate TLS site to a network observer.
 
 ```yaml
 xray:
-  # Enables the VLESS transport listeners.
+  # Enables the VLESS transport listeners. Defaults to true.
   enabled: true
 
   # Address the per-node VLESS listeners bind to.
@@ -71,15 +74,49 @@ xray:
   # deterministically from its node ID within [listen_port, max_listen_port].
   max_listen_port: 10100
 
-  # Transport security: "none" for plain VLESS, "tls" for TLS-wrapped VLESS.
-  # When "tls" or "xtls", cert_file and key_file are required.
-  security: none
+  # Transport security. Default: "reality_xtls" (VLESS + XTLS-Reality with a
+  # uTLS ClientHello — the stealth transport). Other modes: "none" (plain
+  # VLESS over TCP), "tls" and "xtls" (TLS-wrapped VLESS). "reality" is an
+  # alias for "reality_xtls".
+  security: reality_xtls
+
+  # cert_file / key_file are OPTIONAL with reality_xtls: when omitted, the
+  # server performs a Reality handshake to Reality.Dest instead of presenting
+  # a local certificate. Required for "tls"/"xtls", and for reality_xtls when
+  # you want to present a local cert rather than use the dest-based handshake.
   cert_file: ""
   key_file: ""
 
   # How long to wait for a client's VLESS header before closing the
   # connection.
   timeout: 30s
+
+  # XTLS-Reality parameters (only used when security == "reality_xtls").
+  reality:
+    # Decoy destination the server mimics, e.g. "www.microsoft.com:443".
+    # If empty, derived from server_url.
+    dest: ""
+    # SNI values that pass Reality verification.
+    server_names: []
+    # Reality private/public keys (hex). Auto-generated if empty.
+    private_key: ""
+    public_key: ""
+    # Reality short ID (hex, 0-8 bytes).
+    short_id: ""
+    # Reality spiderX path prefix.
+    spider_x: ""
+
+  # uTLS ClientHello fingerprint to mimic (chrome, firefox, safari,
+  # randomized, ...). Only effective with reality_xtls. Default: chrome.
+  utls_fingerprint: chrome
+
+  # Stealth gates DERP fallback on stealth verification. When enforce is
+  # true (default with reality_xtls), DERP relays are only offered when the
+  # VLESS+Reality transport passes stealth checks (fail-closed).
+  stealth:
+    enforce: true
+    probe_interval: 30s
+    probe_timeout: 5s
 ```
 
 !!! warning "Firewall"
@@ -97,10 +134,14 @@ Two independent TLS decisions:
 - **Control API** — terminate TLS at `server_url` with your reverse proxy
   (recommended) or the server's built-in TLS (`tls_cert_path` /
   `tls_key_path`). See [TLS](../ref/tls.md).
-- **VLESS transport** — set `xray.security: tls` and point `cert_file` /
-  `key_file` at a certificate for the host the clients will dial. This
-  wraps the VLESS handshake in real TLS (optionally shaped by uTLS on the
-  client side) so the connection is indistinguishable from HTTPS.
+- **VLESS transport** — the default `reality_xtls` mode needs **no local
+  certificate**: the server mimics a legitimate TLS site via the Reality
+  handshake to `reality.dest`, so the connection is indistinguishable from
+  HTTPS without you provisioning a cert. If you instead set `security: tls`
+  or `security: xtls`, point `cert_file` / `key_file` at a certificate for
+  the host the clients will dial. With `reality_xtls` you may still supply
+  `cert_file` / `key_file` to present a local certificate instead of using
+  the dest-based handshake.
 
 ## Run the server
 
