@@ -28,6 +28,9 @@ config.yaml
 config*.yaml
 !config-example.yaml
 derp.yaml
+
+# Prompt files (may contain secrets) — never commit or push
+prompts/
 *.hujson
 !hscontrol/policy/v2/testdata/*/*.hujson
 *.key
