@@ -21,16 +21,20 @@ Dark theme matches the scheduler WebUI (`--bg:#0b0e14;--panel:#11151f;--line:#23
 All endpoints serve JSON from the live `state.State` stores and require no extra auth when accessed via the embedded UI (API-key auth is enforced at the control-plane API layer).
 
 ```
-GET /web/api/nodes        # list nodes
-GET /web/api/users        # list users
-GET /web/api/preauthkeys  # list pre-auth keys
-GET /web/api/policy       # current policy
-GET /web/api/derp         # DERP map + stealth_satisfied flag
-GET /web/api/vless/{id}   # VLESS URI for node {id}
-GET /web/api/health       # health + stealth status
+GET    /web/api/nodes        # list nodes
+DELETE /web/api/nodes/{id}   # delete node (stub — wire to state.DeleteNode)
+GET    /web/api/users        # list users
+POST   /web/api/users        # create user {name, email}
+GET    /web/api/preauthkeys  # list pre-auth keys
+POST   /web/api/preauthkeys  # create pre-auth key {userID, reusable, ephemeral, aclTags}
+GET    /web/api/policy       # current policy
+PUT    /web/api/policy       # set policy {policy: "HuJSON string"} (also POST)
+GET    /web/api/derp         # DERP map + stealth_satisfied flag
+GET    /web/api/vless/{id}   # VLESS URI for node {id}
+GET    /web/api/health       # health + stealth status
 ```
 
-`/admin/api/*` is an alias for `/web/api/*`.
+All write endpoints are available under both `/web/api/*` and `/admin/api/*` (alias). They validate JSON and, when `WriteState` is implemented, delegate to `state.State` (e.g. `CreateUser`, `CreatePreAuthKey`, `SetPolicy`, `DeleteNode`). Otherwise they return stub success for coverage. Holepunching via DERP/STUN is exempt from the VLESS requirement and is only offered when stealth is satisfied.
 
 ## Serving
 

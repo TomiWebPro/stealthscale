@@ -8,6 +8,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"strconv"
@@ -97,18 +98,64 @@ func Handler(cfg *types.Config, st State) http.Handler {
 	})
 
 	// API endpoints - both prefixes
-	apiNodes := func(w http.ResponseWriter, r *http.Request) { handleNodes(w, r, st) }
-	apiUsers := func(w http.ResponseWriter, r *http.Request) { handleUsers(w, r, st) }
-	apiKeys := func(w http.ResponseWriter, r *http.Request) { handlePreAuthKeys(w, r, st) }
-	apiPolicy := func(w http.ResponseWriter, r *http.Request) { handlePolicy(w, r, st) }
+	apiNodes := func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handleNodes(w, r, st)
+		case http.MethodDelete:
+			handleDeleteNode(w, r, st)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+	apiNodesWithID := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			handleDeleteNode(w, r, st)
+			return
+		}
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+	apiUsers := func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handleUsers(w, r, st)
+		case http.MethodPost:
+			handleCreateUser(w, r, st)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+	apiKeys := func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handlePreAuthKeys(w, r, st)
+		case http.MethodPost:
+			handleCreatePreAuthKey(w, r, st)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+	apiPolicy := func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handlePolicy(w, r, st)
+		case http.MethodPut, http.MethodPost:
+			handleSetPolicy(w, r, st)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
 	apiDERP := func(w http.ResponseWriter, r *http.Request) { handleDERP(w, r, cfg, st) }
 	apiVLESS := func(w http.ResponseWriter, r *http.Request) { handleVLESS(w, r, cfg) }
 	apiHealth := func(w http.ResponseWriter, r *http.Request) { handleHealth(w, r, cfg, st) }
 
 	for _, prefix := range []string{"/web/api", "/admin/api"} {
 		mux.HandleFunc(prefix+"/nodes", apiNodes)
+		mux.HandleFunc(prefix+"/nodes/", apiNodesWithID)
 		mux.HandleFunc(prefix+"/users", apiUsers)
+		mux.HandleFunc(prefix+"/users/", apiUsers)
 		mux.HandleFunc(prefix+"/preauthkeys", apiKeys)
+		mux.HandleFunc(prefix+"/preauthkeys/", apiKeys)
 		mux.HandleFunc(prefix+"/policy", apiPolicy)
 		mux.HandleFunc(prefix+"/derp", apiDERP)
 		mux.HandleFunc(prefix+"/vless/", apiVLESS) // /vless/{id}
@@ -331,4 +378,128 @@ func handleHealth(w http.ResponseWriter, r *http.Request, cfg *types.Config, st 
 			"security": cfg.XRay.Security,
 		},
 	})
+}
+
+func handleCreateUser(w http.ResponseWriter, r *http.Request, st State) {
+	var req struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, "missing name", http.StatusBadRequest)
+		return
+	}
+	// If State implements CreateUser, delegate; otherwise stub.
+	if ws, ok := any(st).(interface {
+		CreateUser(types.User) (*types.User, error)
+	}); ok {
+		u, err := ws.CreateUser(types.User{Name: req.Name, Email: req.Email})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]any{"user": u})
+		return
+	}
+	// Stub: return synthesized user.
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]any{
+		"user": map[string]any{
+			"name":  req.Name,
+			"email": req.Email,
+		},
+		"status": "created (stub — wire to state.State.CreateUser for persistence)",
+	})
+}
+
+func handleCreatePreAuthKey(w http.ResponseWriter, r *http.Request, st State) {
+	var req struct {
+		UserID    *uint   `json:"userID"`
+		Reusable  bool    `json:"reusable"`
+		Ephemeral bool    `json:"ephemeral"`
+		Tags      []string `json:"aclTags"`
+		Expiry    *string `json:"expiry"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Stub response; real would call st.CreatePreAuthKey.
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, map[string]any{
+		"preAuthKey": map[string]any{
+			"userID":    req.UserID,
+			"reusable":  req.Reusable,
+			"ephemeral": req.Ephemeral,
+			"tags":      req.Tags,
+		},
+		"status": "created (stub — wire to state.State.CreatePreAuthKey)",
+	})
+}
+
+func handleSetPolicy(w http.ResponseWriter, r *http.Request, st State) {
+	var req struct {
+		Policy string `json:"policy"`
+		Data   string `json:"data"`
+	}
+	body, _ := io.ReadAll(r.Body)
+	_ = json.Unmarshal(body, &req)
+	pol := req.Policy
+	if pol == "" {
+		pol = req.Data
+	}
+	if pol == "" {
+		http.Error(w, "missing policy", http.StatusBadRequest)
+		return
+	}
+	if ws, ok := any(st).(interface{ SetPolicy([]byte) (bool, error) }); ok {
+		if _, err := ws.SetPolicy([]byte(pol)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]any{"status": "policy updated"})
+		return
+	}
+	writeJSON(w, map[string]any{"status": "policy updated (stub — wire to state.SetPolicy)"})
+}
+
+func handleDeleteNode(w http.ResponseWriter, r *http.Request, st State) {
+	// Extract node ID from /web/api/nodes/{id} or query ?id=
+	path := r.URL.Path
+	var idStr string
+	if idx := strings.Index(path, "/nodes/"); idx != -1 {
+		idStr = strings.TrimPrefix(path[idx+len("/nodes/"):], "/")
+		if slash := strings.Index(idStr, "/"); slash != -1 {
+			idStr = idStr[:slash]
+		}
+		idStr = strings.TrimSpace(idStr)
+	}
+	if idStr == "" {
+		idStr = r.URL.Query().Get("id")
+	}
+	if idStr == "" {
+		http.Error(w, "missing node id", http.StatusBadRequest)
+		return
+	}
+	nodeIDInt, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid node id", http.StatusBadRequest)
+		return
+	}
+	nodeID := types.NodeID(nodeIDInt)
+	if ws, ok := any(st).(interface{ DeleteNode(types.NodeID) error }); ok {
+		if err := ws.DeleteNode(nodeID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"status": "deleted", "nodeID": nodeID.String()})
+		return
+	}
+	// Stub
+	writeJSON(w, map[string]any{"status": "deleted (stub)", "nodeID": nodeID.String()})
 }

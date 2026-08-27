@@ -1,12 +1,20 @@
 # StealthScale
 
-> A self-hosted Tailscale control server that replaces WireGuard with the
-> **VLESS + XRay + uTLS** transport for maximum stealth.
+> A self-hosted, stealthy Tailscale-compatible **mesh** — one binary that is
+> both the client and the coordinator — using **VLESS + Reality (XTLS) + uTLS**
+> so all traffic is indistinguishable from ordinary TLS.
 
 StealthScale is a fork of [Headscale](https://github.com/juanfont/headscale)
-that keeps the full control-plane feature set — node registration, IP
-allocation, policy, MagicDNS, DERP — while changing the wire protocol so the
-tailnet is not recognisable as Tailscale/Headscale traffic.
+with a different end goal: **there is no "head" server and no special client.**
+Every device runs the same binary, becomes a *node* in the network, and
+coordinates with its peers. An always-on coordinate server is encouraged for
+reliability, but **any node can become a coordinate server by default** — there
+is no privileged role. The wire protocol is replaced with VLESS + Reality +
+uTLS so node-to-node and node-to-coordinator traffic is not recognisable as
+Tailscale/Headscale.
+
+See [docs/stealthscale/overview.md](docs/stealthscale/overview.md) for the
+project goals and current status.
 
 ## Why
 
@@ -19,12 +27,18 @@ ordinary TLS to a network observer.
 ## How it works
 
 ```
-+------------------+   VLESS (deterministic port + UUID)   +------------------+
-|  Patched client  | -------------------------------------> |  StealthScale   |
-|  (tailscaled)    |   TLS-shaped ClientHello (uTLS)        |  server         |
-+------------------+   noise handshake + HTTP/2 machine API  |  (stscale)     |
-                                                             +------------------+
+        +-------------------- unified StealthScale node (same binary) -------------------+
+        |  coordination (embedded)  <----- VLESS+Reality ----->  coordination (peer)    |
+        |        ^   |                                  ^                             |
+        |        |   | (this node is also a node)         | (peer is also a node)        |
+        |        +---+------------------------------------+-----------------------------+
+        |  data plane: node <-> node over VLESS stealth (noise inside)                  |
+        +------------------------------------------------------------------------------+
 ```
+
+Every device runs the **same binary**. Each is a *node*. Any node may act as the
+coordinator (on by default); the others treat it as the source of truth but still
+coordinate directly with each other. There is no separate "headscale" server.
 
 - Every registered node gets its **own VLESS listener**: a deterministic
   port and UUID derived from its node ID (`UUIDv5("stealthscale:<id>")` and
@@ -87,22 +101,52 @@ stscale users create alice
 stscale preauthkeys create --user <user-id> --reusable
 ```
 
-### 5. Connect a patched client
+### 5. Run another device as a node
 
-On the client:
+There is no special client. Run the **same binary** on any device; it becomes a
+node and can act as the coordinator by default:
 
 ```shell
-tailscale up \
-  --login-server https://ctl.example.com \
+stscale serve --config /etc/stealthscale/config.yaml
+```
+
+To join an existing network, point it at a coordinator and (if needed) a
+pre-auth key:
+
+```shell
+stscale up \
+  --coordinator https://ctl.example.com \
   --authkey <pre-auth-key> \
   --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls'
 ```
 
-Fetch the `vless://` URI for a node on the server:
+Fetch the `vless://` URI for a node on the coordinator:
 
 ```shell
 stscale nodes vless <node-id>
 ```
+
+> **Discovery vs stealth:** finding a coordinator for the first time may use
+> whatever is necessary (including non-stealth discovery). But once two peers
+> have identified each other, **all further transport is VLESS stealth** — there
+> is no plaintext control path. Real XTLS-Reality + uTLS only; no simulated
+> stealth.
+
+### Web UI — the control plane
+
+StealthScale ships an **embedded Web UI** (at `/web` and `/admin`) that is the
+primary management surface. It is **not** a read-only dashboard: every
+configurable aspect of the network — nodes, users, pre-auth keys, tags, policy
+(HuJSON), DERP, VLESS endpoints, and coordinator election — must be configurable
+from it.
+
+We treat [headscale-ui](https://github.com/gurucomputing/headscale-ui) and the
+[Headscale Web UI reference](https://headscale.net/stable/ref/integration/web-ui/)
+as **design guidelines and improve on them**: the StealthScale UI talks to the
+live control plane, is embedded in the binary, and must expose full write
+operations. The current embedded UI is read-only (see
+[docs/stealthscale/overview.md](docs/stealthscale/overview.md) → *Current
+status*); closing that gap is a core goal.
 
 ## Documentation
 

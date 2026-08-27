@@ -1,24 +1,30 @@
-# Connecting a patched client
+# Connecting a node (same binary)
 
-StealthScale does **not** work with stock Tailscale clients. The data path
-was changed from WireGuard to VLESS, so the client must be modified to dial
-the node's VLESS endpoint and speak the Tailscale noise protocol over the
-authenticated stream.
+StealthScale's **unified binary** (`stscale`) is both client and coordinator.
+Every device runs the same `stscale` binary; `stscale serve` starts the
+coordinator, and `stscale up` joins an existing network. This is the
+recommended path — no separate patched `tailscaled` is required.
 
-This page assumes you already have a built, patched `tailscaled`/`tailscale`
-binary. If you are building one, read the
-[client modification guide](../client-modification.md) first.
+> See the [project goals](overview.md#project-goals) and
+> [bootstrap, discovery, and steady-state transport](overview.md#bootstrap-discovery-and-steady-state-transport)
+> for the design rationale: discovery may be non-stealth, but **all
+> post-discovery transport is VLESS stealth**.
+
+If you prefer a patched Tailscale client (e.g. `tailscaled` with the VLESS
+dial patch), that still works — see
+[Legacy patched client](#legacy-patched-tailscale-client) and the
+[client modification guide](../client-modification.md).
 
 ## What the client needs
 
-Every node must be told three things before it can talk to the server:
+Every node must be told three things before it can talk to the coordinator:
 
-1. The **control server URL** (`--login-server`).
+1. The **coordinator URL** (`--coordinator`, e.g. `https://ctl.example.com`).
 1. Its **node UUID** — the VLESS authentication identity.
 1. Its **VLESS endpoint** — address and port (and TLS mode if enabled).
 
 The UUID and port are derived from the node's ID and never change. You fetch
-them on the server with:
+them on the coordinator with:
 
 ```shell
 stscale nodes vless <node-id>
@@ -31,43 +37,72 @@ Field    | Value
 ID       | 9f4d4f6c-d1e2-4a3b-9c8d-7a6b5c4d3e2f
 Address  | 10.0.0.5
 Port     | 10042
-Security | none
-URI      | vless://9f4d4f6c-d1e2-4a3b-9c8d-7a6b5c4d3e2f@10.0.0.5:10042?security=none
+Security | reality_xtls
+URI      | vless://9f4d4f6c-d1e2-4a3b-9c8d-7a6b5c4d3e2f@10.0.0.5:10042?security=reality_xtls&fp=chrome&type=tcp&flow=xtls-rprx-vision
 ```
 
 Give the client the `URI` (or the `id`/`address`/`port`/`security` fields
-individually, depending on how the patch reads its configuration).
+individually).
 
 !!! note "Listeners start on registration"
 
     `stscale nodes vless <node-id>` computes the endpoint deterministically
-    for **any** node ID, but the server only runs a VLESS listener for a node
+    for **any** node ID, but the coordinator only runs a VLESS listener for a node
     once that node has registered. Register the node first, then hand it its
     endpoint (e.g. `stscale nodes list` to confirm it exists).
 
-## Registering a node
+## Registering a node — unified binary (recommended)
 
-With a pre-auth key from the server
+With a pre-auth key from the coordinator
 ([create one first](install.md#register-users-and-preauth-keys)):
+
+```shell
+stscale up \
+  --coordinator https://ctl.example.com \
+  --authkey <pre-auth-key> \
+  --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls'
+# --endpoint is an alias for --vless-uri; no --vless flag needed — VLESS is
+# the default transport (xray.enabled=true, security=reality_xtls), holepunching via DERP/STUN is exempt.
+```
+
+`stscale up` is the client side of the unified binary (`hscontrol/xray/client.go`
+`DialVLESS`): it dials the node's stealth endpoint (`--vless-uri` / `--endpoint`), authenticates with its UUID,
+and verifies the stealth transport (Reality + uTLS, `fp=chrome` by default).
+Once two peers have identified each other, **all further transport is VLESS
+stealth** — there is no plaintext control path. Holepunching via DERP/STUN for
+NAT traversal is exempt and is only used when stealth is satisfied
+(`xray.stealth.enforce: true`, fail-closed).
+
+The coordinator is also a node: running `stscale serve` on any device makes it
+both a node and a coordinator (on by default). Point another device at it with
+`stscale up --coordinator ...` to join.
+
+!!! note "Discovery vs stealth"
+
+    Finding a coordinator for the first time may use whatever is necessary
+    (including non-stealth discovery). But once two peers have exchanged
+    identity, all communication is VLESS stealth per
+    [overview.md](overview.md#bootstrap-discovery-and-steady-state-transport).
+
+Subsequent logins (e.g. after a reboot) are stateless: the node reconnects to
+the same endpoint with the same UUID (derived as
+`UUIDv5("6ba7b810-9dad-11d1-80b4-00c04fd430c8", "stealthscale:<id>")`).
+
+### Legacy patched Tailscale client
+
+If you already have a patched `tailscaled`/`tailscale` binary (see
+[client modification guide](../client-modification.md)), it also works:
 
 ```shell
 tailscale up \
   --login-server https://ctl.example.com \
   --authkey <pre-auth-key> \
-  --vless-uri 'vless://<uuid>@<addr>:<port>?security=none'
+  --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls'
 ```
 
-!!! note
-
-    The exact flag for the VLESS endpoint depends on the client patch. It
-    may instead read from a config file or environment variable — see the
-    modification guide and your build's `tailscale up --help`.
-
-The client connects to its VLESS endpoint, authenticates with its UUID,
-and registers through the machine API exactly as a normal Tailscale client
-would — only the transport differs. Subsequent logins (e.g. after a reboot)
-are stateless on the client side: it reconnects to the same endpoint with
-the same UUID.
+The exact flag for the VLESS endpoint depends on the patch; it may read from a
+config file or `TS_VLESS_URI`. The transport is the same (VLESS + noise +
+HTTP/2), only the binary differs.
 
 ## Verifying connectivity
 

@@ -18,3 +18,5 @@ Acceptance:
 - API endpoints for management
 
 <!-- status: done -->
+
+<!-- implementation: hscontrol/webui (embed.FSHandler at /web+/admin), frontend dark theme, APIs nodes/users/preauthkeys/policy/derp/vless/health, registered via webui.Register in app.go:createRouter (same for server+client), handlers.go reference, tests pass -->

@@ -89,9 +89,11 @@ See prompt `prompts/derp-stealth-fallback.md`.
 No code difference: both import `hscontrol/xray`:
 
 - Server: `hscontrol/xray_server.go:StartXRayServer` calls `xray.NewServer(&cfg.XRay, handler)` and `EnsureNodeListener`.
-- Client: `hscontrol/xray/client.go` `DialVLESS(ctx, cfg, utlsFingerprint)` writes VLESS header and awaits version byte.
+- Client: `hscontrol/xray/client.go` `DialVLESS(ctx, cfg)` and `WriteVLESSRequest` — writes VLESS header and awaits version byte. Used by `stscale up --coordinator --vless-uri`.
 
-Same `XRayConfig`, same `VLESSConfig.URI()`. Single binary `stscale` can serve or dial.
+Same `XRayConfig`, same `VLESSConfig.URI()`. Single binary `stscale` can serve or dial (`stscale serve` and `stscale up`).
+
+Holepunching (STUN/DERP direct path discovery, NAT traversal) is **exempt** from the VLESS requirement: it may use plain UDP/STUN and is only offered when stealth is satisfied (`derp.ShouldIncludeDERP` / `stealth.Checker`). All other transport — node-to-coordinator, node-to-node control, and data via the stealth listener — is VLESS. See `docs/stealthscale/overview.md#bootstrap-discovery-and-steady-state-transport`.
 
 See `prompts/unified-server-client.md`.
 
