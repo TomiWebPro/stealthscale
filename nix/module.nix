@@ -32,7 +32,7 @@ in
 
   options = {
     services.stealthscale = {
-      enable = lib.mkEnableOption "stealthscale, Open Source coordination server for Tailscale";
+      enable = lib.mkEnableOption "self-hosted coordination server for mesh networks";
 
       package = lib.mkPackageOption pkgs "stealthscale" { };
 
@@ -50,7 +50,7 @@ in
         default = "stealthscale";
         type = lib.types.str;
         description = ''
-          User account under which stealthscale runs.
+          User account under which the service runs.
 
           ::: {.note}
           If left as the default value this user will automatically be created
@@ -64,7 +64,7 @@ in
         default = "stealthscale";
         type = lib.types.str;
         description = ''
-          Group under which stealthscale runs.
+          Group under which the service runs.
 
           ::: {.note}
           If left as the default value this group will automatically be created
@@ -95,7 +95,7 @@ in
       settings = lib.mkOption {
         description = ''
           Overrides to {file}`config.yaml` as a Nix attribute set.
-          Check the [example config](https://github.com/tomiwebpro/stealthscale/blob/main/config-example.yaml)
+          Check the example configuration shipped with the package (config-example.yaml)
           for possible options.
         '';
         type = lib.types.submodule {
@@ -108,7 +108,7 @@ in
               description = ''
                 The url clients will connect to.
               '';
-              example = "https://mystealthscale.example.com:443";
+              example = "https://mycoord.example.com:443";
             };
 
             noise.private_key_path = lib.mkOption {
@@ -317,7 +317,7 @@ in
                 type = lib.types.str;
                 default = "info";
                 description = ''
-                  stealthscale log level.
+                  service log level.
                 '';
                 example = "debug";
               };
@@ -326,7 +326,7 @@ in
                 type = lib.types.str;
                 default = "text";
                 description = ''
-                  stealthscale log format.
+                  service log format.
                 '';
                 example = "json";
               };
@@ -672,7 +672,7 @@ in
     )
 
     (mkRemovedOptionModule [ "services" "stealthscale" "openIdConnect" "domainMap" ] ''
-      StealthScale no longer uses domain_map. If you're using an old version of stealthscale you can still set this option via services.stealthscale.settings.oidc.domain_map.
+      The service no longer uses domain_map. If you're using an old version you can still set this option via services.stealthscale.settings.oidc.domain_map.
     '')
   ];
 
@@ -731,14 +731,14 @@ in
     users.groups.stealthscale = lib.mkIf (cfg.group == "stealthscale") { };
 
     users.users.stealthscale = lib.mkIf (cfg.user == "stealthscale") {
-      description = "stealthscale user";
+      description = "coordination service user";
       home = dataDir;
       group = cfg.group;
       isSystemUser = true;
     };
 
     systemd.services.stealthscale = {
-      description = "stealthscale coordination server for Tailscale";
+      description = "Network coordination service";
       wants = [ "network-online.target" ];
       after = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];

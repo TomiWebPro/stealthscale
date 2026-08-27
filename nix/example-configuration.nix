@@ -1,6 +1,6 @@
-# Example NixOS configuration using the stealthscale module
+# Example NixOS configuration using the coordination module
 #
-# This file demonstrates how to use the stealthscale NixOS module from this flake.
+# This file demonstrates how to use the coordination NixOS module from this flake.
 # To use in your own configuration, add this to your flake.nix inputs:
 #
 #   inputs.stealthscale.url = "github:juanfont/stealthscale";
@@ -13,7 +13,7 @@
 { config, pkgs, ... }:
 
 {
-  # Import the stealthscale module
+  # Import the coordination module
   # In a real configuration, this would come from the flake input
   # imports = [ inputs.stealthscale.nixosModules.default ];
 
@@ -29,10 +29,10 @@
 
     settings = {
       # The URL clients will connect to
-      server_url = "https://stealthscale.example.com";
+      server_url = "https://coord.example.com";
 
       # IP prefixes for the tailnet
-      # These use the freeform settings - you can set any stealthscale config option
+      # These use the freeform settings - you can set any coordination config option
       prefixes = {
         v4 = "100.64.0.0/10";
         v6 = "fd7a:115c:a1e0::/48";
@@ -55,8 +55,10 @@
 
       # DERP (relay) configuration
       derp = {
-        # Use default Tailscale DERP servers
-        urls = [ "https://controlplane.tailscale.com/derpmap/default" ];
+        # No public DERP servers are configured by default. The embedded DERP
+        # server (derp.server.enabled) is only used as a stealth-gated fallback
+        # and must not be exposed directly.
+        urls = [ ];
         auto_update_enabled = true;
         update_frequency = "24h";
 
@@ -72,7 +74,7 @@
       database = {
         type = "sqlite";
         sqlite = {
-          path = "/var/lib/stealthscale/db.sqlite";
+          path = "/var/lib/coordination/db.sqlite";
           write_ahead_log = true;
         };
 
@@ -81,9 +83,9 @@
         # postgres = {
         #   host = "localhost";
         #   port = 5432;
-        #   name = "stealthscale";
-        #   user = "stealthscale";
-        #   password_file = "/run/secrets/stealthscale-db-password";
+        #   name = "coordination";
+        #   user = "coordination";
+        #   password_file = "/run/secrets/coordination-db-password";
         # };
       };
 
@@ -103,7 +105,7 @@
       # };
 
       # Optional: Let's Encrypt TLS certificates
-      # tls_letsencrypt_hostname = "stealthscale.example.com";
+      # tls_letsencrypt_hostname = "coord.example.com";
       # tls_letsencrypt_challenge_type = "HTTP-01";
 
       # Optional: Provide your own TLS certificates
@@ -113,7 +115,7 @@
       # ACL policy configuration
       policy = {
         mode = "file";
-        path = "/var/lib/stealthscale/policy.hujson";
+        path = "/var/lib/coordination/policy.hujson";
       };
 
       # You can add ANY stealthscale configuration option here thanks to freeform settings
@@ -133,7 +135,7 @@
   # Optional: Use with nginx reverse proxy for TLS termination
   # services.nginx = {
   #   enable = true;
-  #   virtualHosts."stealthscale.example.com" = {
+  #   virtualHosts."coord.example.com" = {
   #     enableACME = true;
   #     forceSSL = true;
   #     locations."/" = {

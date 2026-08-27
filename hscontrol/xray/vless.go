@@ -5,11 +5,13 @@ package xray
 
 import (
 	"bufio"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"time"
 
 	"github.com/gofrs/uuid/v5"
@@ -30,23 +32,34 @@ const (
 	// vlessCommandTCP marks a TCP stream in the VLESS addons.
 	vlessCommandTCP uint16 = 0x01
 
-	// vlessUUIDNamespace is the namespace used to derive a stable,
-	// deterministic UUID per node. Deriving (rather than storing) the
-	// UUID keeps it stable across server restarts without a database
-	// migration: the operator can hand the UUID to a client and it stays
-	// valid for the lifetime of the node.
+	// vlessUUIDNamespace is the namespace used as a fallback ONLY when no
+	// server secret is configured. In production a per-server secret keys
+	// the derivation (see NodeUUID), so endpoints are not enumerable by an
+	// outsider who knows this public namespace.
 	vlessUUIDNamespace = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
 )
 
+// hmacSum returns the HMAC-SHA256 of label keyed by secret.
+func hmacSum(secret, label string) []byte {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(label))
+	return mac.Sum(nil)
+}
+
 // VLESSConfig represents the configuration for a VLESS endpoint.
 type VLESSConfig struct {
-	ID       string        `json:"id"`                // UUID for authentication
-	Network  string        `json:"network"`           // Network type (tcp, ws, etc.)
-	Address  string        `json:"address"`           // Listen address
-	Port     int           `json:"port"`              // Listen port
-	Security string        `json:"security"`          // Security setting (none, tls, xtls)
-	Alpn     string        `json:"alpn,omitempty"`    // ALPN for TLS
-	Timeout  time.Duration `json:"timeout,omitempty"` // Connection timeout
+	ID         string        `json:"id"`                   // UUID for authentication
+	Network    string        `json:"network"`              // Network type (tcp, ws, etc.)
+	Address    string        `json:"address"`              // Listen address
+	Port       int           `json:"port"`                 // Listen port
+	Security   string        `json:"security"`             // Security setting (none, tls, xtls)
+	Alpn       string        `json:"alpn,omitempty"`       // ALPN for TLS
+	Timeout    time.Duration `json:"timeout,omitempty"`    // Connection timeout
+	Dest       string        `json:"dest,omitempty"`       // Reality decoy destination (host:port)
+	FP         string        `json:"fp,omitempty"`         // uTLS fingerprint to mimic
+	PublicKey  string        `json:"pbk,omitempty"`        // Reality public key (hex)
+	ShortID    string        `json:"sid,omitempty"`        // Reality short id (hex)
+	SpiderX    string        `json:"spider_x,omitempty"`   // Reality spiderX path
 }
 
 // NewVLESSConfig creates a default VLESS configuration.
@@ -89,7 +102,9 @@ func (c *VLESSConfig) Validate() error {
 // vless://<uuid>@<address>:<port>?security=<security>, suitable for
 // distribution to clients.
 // For reality_xtls, the URI includes reality parameters so a patched client
-// can perform the Reality handshake with uTLS.
+// can perform the Reality handshake with uTLS. The decoy destination,
+// public key and short id are embedded so the client can validate the
+// server and present the correct SNI.
 func (c *VLESSConfig) URI() string {
 	// Default to reality_xtls for stealth; callers with Security=="none" get legacy
 	sec := c.Security
@@ -102,7 +117,23 @@ func (c *VLESSConfig) URI() string {
 	base := fmt.Sprintf("vless://%s@%s:%d?security=%s", c.ID, c.Address, c.Port, sec)
 	if sec == "reality_xtls" {
 		// Append uTLS fingerprint and reality hints for client
-		base += "&fp=chrome&type=tcp&flow=xtls-rprx-vision"
+		fp := c.FP
+		if fp == "" {
+			fp = "chrome"
+		}
+		base += "&fp=" + fp + "&type=tcp&flow=xtls-rprx-vision"
+		if c.Dest != "" {
+			base += "&dest=" + url.QueryEscape(c.Dest)
+		}
+		if c.PublicKey != "" {
+			base += "&pbk=" + c.PublicKey
+		}
+		if c.ShortID != "" {
+			base += "&sid=" + c.ShortID
+		}
+		if c.SpiderX != "" && c.SpiderX != "/" {
+			base += "&spx=" + url.QueryEscape(c.SpiderX)
+		}
 	}
 	return base
 }
@@ -118,20 +149,37 @@ func (c *VLESSConfig) FromJSON(data []byte) error {
 }
 
 // NodeUUID returns the deterministic VLESS UUID for a node. The UUID is
-// derived from the node ID and never changes across restarts.
-func NodeUUID(nodeID types.NodeID) string {
-	ns := uuid.FromStringOrNil(vlessUUIDNamespace)
-	return uuid.NewV5(ns, fmt.Sprintf("stealthscale:%d", nodeID)).String()
+// derived from the node ID and never changes across restarts. When a
+// server secret is configured it keys the derivation (HMAC), so an outsider
+// who knows the public namespace and a node's sequential ID cannot compute
+// the endpoint UUID offline.
+func NodeUUID(nodeID types.NodeID, secret string) string {
+	if secret == "" {
+		// Fallback used only when no secret is configured (e.g. tests).
+		// It is deterministic but publicly enumerable — production always
+		// sets a secret via XRayConfig.InitIdentity.
+		ns := uuid.FromStringOrNil(vlessUUIDNamespace)
+		return uuid.NewV5(ns, fmt.Sprintf("stealthscale:%d", nodeID)).String()
+	}
+	nsBytes := hmacSum(secret, "uuid-namespace")
+	ns := uuid.FromBytesOrNil(nsBytes[:16])
+	return uuid.NewV5(ns, fmt.Sprintf("node:%d", nodeID)).String()
 }
 
 // NodePort returns the deterministic VLESS listen port for a node, derived
-// from a hash of the node ID into the configured range.
-func NodePort(nodeID types.NodeID, minPort, maxPort int) int {
+// from a keyed hash of the node ID into the configured range. With a server
+// secret this is not enumerable by an outsider.
+func NodePort(nodeID types.NodeID, secret string, minPort, maxPort int) int {
 	if maxPort <= minPort {
 		return minPort
 	}
 
-	sum := sha256.Sum256([]byte(fmt.Sprintf("stealthscale-port:%d", nodeID)))
+	var sum [32]byte
+	if secret == "" {
+		sum = sha256.Sum256([]byte(fmt.Sprintf("stealthscale-port:%d", nodeID)))
+	} else {
+		sum = sha256.Sum256(hmacSum(secret, fmt.Sprintf("node-port:%d", nodeID)))
+	}
 	hash := binary.BigEndian.Uint64(sum[:8])
 
 	span := uint64(maxPort - minPort + 1)

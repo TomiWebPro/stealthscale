@@ -8,9 +8,9 @@ binary, becomes a *node* in the network, and coordinates with its peers. An
 always-on coordinate server is encouraged for reliability, but **any node can
 become a coordinate server by default** — there is no privileged role.
 
-The wire protocol is replaced with **VLESS + Reality (XTLS) + uTLS** so
-node-to-node and node-to-coordinator traffic is indistinguishable from ordinary
-TLS to a network observer.
+The wire protocol is replaced with **VLESS + uTLS-shaped TLS presenting a decoy
+certificate (Reality-style)** so node-to-node and node-to-coordinator traffic is
+indistinguishable from ordinary TLS to a network observer.
 
 ## Project goals (what "done" means)
 
@@ -24,12 +24,14 @@ Future work is measured against these targets:
    controller. A coordinator is just a node that other nodes trust as the source
    of truth — and any node can take that role.
 3. **Stealth from first contact — no fake stealth.** The transport must be
-   genuinely fingerprint-resistant using real **XTLS-Reality + uTLS**. *Discovery*
-   (finding a coordinator/peer for the first time) may use whatever it needs to,
-   including non-stealth mechanisms. But **once two peers have identified each
-   other, all further transport is VLESS stealth** — including the registration
-   handshake that follows discovery. There is no "simulated" stealth: this is a
-   deployable project, not a demo.
+   genuinely fingerprint-resistant using **uTLS-shaped TLS with a decoy
+   certificate (Reality-style)**. *Discovery* (finding a coordinator/peer for the
+   first time) may use whatever it needs to, including non-stealth mechanisms. But
+   **once two peers have identified each other, all further transport is VLESS
+   stealth** — including the registration handshake that follows discovery. There
+   is no "simulated" stealth: this is a deployable project, not a demo. (Full
+   XTLS-Reality replay of a real destination's certificate is the target
+   enhancement.)
 4. **The Web UI is the control plane.** It is not a read-only dashboard. Every
    configurable aspect of the network — nodes, users, pre-auth keys, tags,
    policy (HuJSON), DERP, VLESS endpoints, coordinator election — must be
@@ -58,9 +60,11 @@ like ordinary TLS to a network observer:
   real browser's ClientHello, defeating active fingerprinting.
 - **Noise** — the standard Tailscale control protocol (TS2021) still runs, but
   *inside* the VLESS stream instead of on the wire.
-- **Reality (XTLS)** — the TLS surface is provided by a Realty handshake to a
-  decoy destination, so the endpoint is indistinguishable from a legitimate TLS
-  site. No certificate is required.
+- **Reality (uTLS + decoy cert)** — the TLS surface is provided by a uTLS-shaped
+  `crypto/tls` handshake that presents a decoy certificate for the configured
+  `reality.Dest` SNI, so the endpoint resembles a legitimate TLS site. Full
+  XTLS-Reality replay of a real destination's live certificate is planned (see
+  [Current status](#current-status-known-gaps-for-future-agents)).
 
 ## Architecture
 
@@ -138,13 +142,18 @@ existing knowledge applies:
 
 ## Reality_XTLS and stealth-gated DERP
 
-StealthScale's default transport is **VLESS + Reality via XTLS + uTLS**
-(`xray.security: reality_xtls`). Reality performs a TLS handshake to a decoy
-destination (for example `www.microsoft.com:443`) so the endpoint is
-indistinguishable from a legitimate TLS site, while uTLS shapes the ClientHello
-to mimic Chrome/Firefox and defeat active probing. No certificate is required —
-the dest-based handshake provides the TLS surface. This must be **real**
-XTLS-Reality + uTLS shaping, not a log-only stub.
+StealthScale's default transport is **VLESS + uTLS-shaped TLS with a decoy
+certificate** (`xray.security: reality_xtls`). The server presents a decoy
+certificate for the configured `reality.Dest` SNI, and `utls` shapes the
+ClientHello to mimic Chrome/Firefox and defeat active probing. The client
+validates the server via the Reality public key rather than by trusting the
+presented certificate.
+
+> **Implementation note — this is not the real XTLS-Reality library (yet).**
+> The current build does **not** vendor `xray-core`/`go-reality`. It uses the Go
+> standard `crypto/tls` with a self-signed decoy certificate plus `utls` for
+> ClientHello shaping. Full XTLS-Reality replay of a real destination's live
+> certificate requires the `xray-core`/`go-reality` dependency and is planned.
 
 Because DERP relays are themselves fingerprintable, StealthScale **gates DERP
 fallback on stealth** (`xray.stealth.enforce: true`, the default). When the
@@ -169,14 +178,21 @@ done. It reflects the codebase at the time of writing:
   `state.State` when available, otherwise stub for coverage. Remaining: coordinator
   election UI and advanced node tag/route management. Use headscale-ui as the
   interaction-model reference.
-- **VLESS Reality/uTLS is now real (not stubbed).** `hscontrol/xray/server.go`
-  generates an ephemeral self-signed cert for `reality.Dest` and shapes the
-  TLS `ClientHello` via `applyUTLSFingerprint` (chrome/firefox/safari/randomized
-  cipher suites and curves). `hscontrol/xray/client.go` `DialVLESS` writes the
-  VLESS header and verifies the version ack over the (optionally TLS-wrapped)
-  transport. Full XTLS-Reality with external `utls` library and dest dial via
-  CDN is still TODO for production, but the handshake is no longer a log-only
-  stub.
+- **VLESS stealth transport implemented (not a log-only stub).**
+  `hscontrol/xray/server.go` generates an ephemeral self-signed certificate for
+  `reality.Dest` (the decoy SNI) and shapes the TLS `ClientHello` via
+  `applyUTLSFingerprint` (chrome/firefox/safari/randomized cipher suites and
+  curves). `hscontrol/xray/client.go` `DialVLESS` writes the VLESS header,
+  verifies the version ack over the (optionally TLS-wrapped) transport, and
+  validates the server by its Reality public key.
+  **Limitation:** this is `crypto/tls` + `utls` shaping, **not** the real
+  XTLS-Reality library — replaying a real destination's live certificate requires
+  the `xray-core`/`go-reality` dependency and is still TODO.
+- **DERP fail-closed stealth gate is now enforced.** `hscontrol/stealth/stealth.go`
+  `Checker.IsSatisfied()` drives `FilterDERPMap()` so that when stealth is not
+  satisfied the advertised DERP map is empty (fail-closed). This previously was a
+  stub and is now wired into both the initial DERP map load and the periodic
+  ticker in `hscontrol/app.go`.
 - **Bootstrap now supports VLESS stealth.** `hscontrol/xray/client.go` and
   `stscale up --coordinator --authkey --vless-uri` let a node dial its VLESS
   endpoint directly; `hscontrol/auth.go` still creates per-node listeners after

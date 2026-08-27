@@ -1,6 +1,8 @@
-# XRay / VLESS Reference (VLESS+Reality_XTLS)
+# XRay / VLESS Reference (VLESS + uTLS-shaped TLS with decoy cert)
 
-StealthScale replaces WireGuard with **VLESS+Reality via XTLS+uTLS** as the stealth transport. This document is the reference for config, URI, and stealth-gated DERP fallback.
+StealthScale replaces WireGuard with **VLESS + uTLS-shaped TLS presenting a decoy
+certificate (Reality-style)** as the stealth transport. This document is the
+reference for config, URI, and stealth-gated DERP fallback.
 
 ## Defaults (Stealth)
 
@@ -28,16 +30,22 @@ xray:
     probe_timeout: 5s
 ```
 
-Alternatives: `security: none` (plain VLESS), `tls`, `xtls` (require `cert_file`/`key_file`). `reality` is alias for `reality_xtls`.
+Alternatives: `security: none` (plain VLESS), `tls` (requires `cert_file`/`key_file`), `xtls`, and `reality_xtls` (alias `reality`). `reality_xtls` uses `utls` for the ClientHello and requires a `reality.dest` (decoy); the client validates the server via the Reality public key rather than the certificate.
 
-## Why Reality_XTLS
+## Why reality_xtls
 
 - **VLESS**: lightweight proxying, looks like TLS.
-- **Reality**: dest-based handshake to decoy site — endpoint indistinguishable from legitimate TLS site.
+- **Decoy certificate**: the server presents a self-signed certificate for the `reality.dest` SNI, so the endpoint resembles a legitimate TLS site.
 - **uTLS**: ClientHello fingerprint mimics Chrome/Firefox, defeating active probing.
-- **XTLS**: `xtls-rprx-vision` flow for high-performance.
+- **Reality public-key validation**: the client authenticates the server by its Reality public key, not by trusting the presented certificate.
 
 Together, node traffic is not fingerprintable as Tailscale.
+
+> **Not a vendored XTLS-Reality library:** the current build uses Go's standard
+> `crypto/tls` with the decoy certificate plus `utls` for ClientHello shaping.
+> Full XTLS-Reality replay of a real destination's live certificate (the
+> `xtls-rprx-vision` flow) requires the `xray-core`/`go-reality` dependency and is
+> planned.
 
 ## Deterministic Per-Node Endpoints
 
@@ -59,9 +67,9 @@ Example URI (reality_xtls):
 vless://a1b2c3d4-...@192.0.2.1:10443?security=reality_xtls&fp=chrome&type=tcp&flow=xtls-rprx-vision
 ```
 
-- `security=reality_xtls` indicates Reality dest + uTLS.
-- `fp=chrome` is `utls_fingerprint`.
-- `flow=xtls-rprx-vision` is XTLS vision flow.
+- `security=reality_xtls` selects the decoy-cert + uTLS transport (`reality.dest` is required; the client validates via the Reality public key).
+- `fp=chrome` is `utls_fingerprint` (ClientHello shaping).
+- `flow=xtls-rprx-vision` is accepted for URI compatibility, but the current build performs `utls`-shaped `crypto/tls` with a decoy certificate rather than the full XTLS-Reality flow.
 
 For `none`, `tls`, `xtls`, URI is `vless://<uuid>@<addr>:<port>?security=<mode>` (no fp/flow).
 

@@ -12,8 +12,17 @@ recommended path — no separate patched `tailscaled` is required.
 
 If you prefer a patched Tailscale client (e.g. `tailscaled` with the VLESS
 dial patch), that still works — see
-[Legacy patched client](#legacy-patched-tailscale-client) and the
+[Legacy patched Tailscale client](#legacy-patched-tailscale-client) and the
 [client modification guide](../client-modification.md).
+
+!!! note "A stealth-capable client is required for the data plane"
+
+    The unified `stscale` binary *is* the stealth-capable client: it uses `utls`
+    to shape the ClientHello and speaks VLESS to the coordinator. A stock,
+    unmodified Tailscale client (or anything that dials WireGuard) cannot use the
+    data plane — it must be patched to import `hscontrol/xray`. `stscale up`
+    performs a stealth transport check (validating the server's Reality public
+    key) before joining.
 
 ## What the client needs
 
@@ -67,11 +76,12 @@ stscale up \
 
 `stscale up` is the client side of the unified binary (`hscontrol/xray/client.go`
 `DialVLESS`): it dials the node's stealth endpoint (`--vless-uri` / `--endpoint`), authenticates with its UUID,
-and verifies the stealth transport (Reality + uTLS, `fp=chrome` by default).
+and performs a stealth transport check — validating the server via its Reality
+public key over uTLS-shaped TLS with a decoy certificate (`fp=chrome` by default).
 Once two peers have identified each other, **all further transport is VLESS
-stealth** — there is no plaintext control path. Holepunching via DERP/STUN for
-NAT traversal is exempt and is only used when stealth is satisfied
-(`xray.stealth.enforce: true`, fail-closed).
+stealth** — the control path runs inside the stealth stream rather than as a
+plaintext port. Holepunching via DERP/STUN for NAT traversal is exempt and is
+only used when stealth is satisfied (`xray.stealth.enforce: true`, fail-closed).
 
 The coordinator is also a node: running `stscale serve` on any device makes it
 both a node and a coordinator (on by default). Point another device at it with

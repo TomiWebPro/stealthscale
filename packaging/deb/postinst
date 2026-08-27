@@ -1,5 +1,5 @@
 #!/bin/sh
-# postinst script for stealthscale.
+# postinst script for the coordination service.
 
 set -e
 
@@ -15,9 +15,9 @@ set -e
 # for details, see https://www.debian.org/doc/debian-policy/ or
 # the debian-policy package.
 
-STEALTHSCALE_USER="stealthscale"
-STEALTHSCALE_GROUP="stealthscale"
-STEALTHSCALE_HOME_DIR="/var/lib/stealthscale"
+STEALTHSCALE_USER="coordination"
+STEALTHSCALE_GROUP="coordination"
+STEALTHSCALE_HOME_DIR="/var/lib/coordination"
 STEALTHSCALE_SHELL="/usr/sbin/nologin"
 STEALTHSCALE_SERVICE="stealthscale.service"
 
@@ -27,7 +27,7 @@ case "$1" in
       if ! id -u "$STEALTHSCALE_USER" >/dev/null 2>&1; then
         useradd --system --shell "$STEALTHSCALE_SHELL" \
           --gid "$STEALTHSCALE_GROUP" --home-dir "$STEALTHSCALE_HOME_DIR" \
-          --comment "stealthscale default user" "$STEALTHSCALE_USER"
+          --comment "coordination service account" "$STEALTHSCALE_USER"
       fi
 
       # Enable service and keep track of its state

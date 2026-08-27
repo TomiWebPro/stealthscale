@@ -112,6 +112,14 @@ stscale client --vless-uri 'vless://...' --login-server https://ctl.example.com
 
 See `docs/client-modification.md` for patching stock tailscale to import `hscontrol/xray.DialVLESS`.
 
+!!! note "A stealth-capable client is required for the data plane"
+
+    The `stscale` binary (or a Tailscale patched with `hscontrol/xray`) is the
+    stealth-capable client. During `stscale up` it performs a stealth transport
+    check that validates the server via its Reality public key over uTLS-shaped
+    TLS with a decoy certificate. A stock, unmodified Tailscale client cannot use
+    the VLESS data plane.
+
 ## WebUI
 
 The WebUI is **embedded in the same `stscale` binary** — there is no separate service or systemd unit to run. The systemd unit above already serves it on the `listen_addr` port. Visit `http://<server>:8080/web` or `/admin` — same for server and client. See `docs/usage/webui.md`.

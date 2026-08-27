@@ -41,7 +41,7 @@ func Apple(url string) *elem.Element {
 			elem.Li(
 				nil,
 				elem.Text(
-					"Enter your credentials and log in. StealthScale should now be working on your iOS device",
+					"Enter your credentials and log in. Coordination Server should now be working on your iOS device",
 				),
 			),
 		),
@@ -83,7 +83,7 @@ func Apple(url string) *elem.Element {
 		H2(elem.Text("Profiles")),
 		P(
 			elem.Text(
-				"StealthScale can be set to the default server by installing a StealthScale configuration profile:",
+				"Coordination Server can be set to the default server by installing a Coordination Server configuration profile:",
 			),
 		),
 		elem.Div(
@@ -108,7 +108,7 @@ func Apple(url string) *elem.Element {
 			elem.Li(
 				nil,
 				elem.Text("Find and install the "),
-				elem.Strong(nil, elem.Text("StealthScale")),
+				elem.Strong(nil, elem.Text("Coordination Server")),
 				elem.Text(" profile"),
 			),
 			elem.Li(
@@ -189,7 +189,7 @@ func Apple(url string) *elem.Element {
 			),
 			elem.Li(
 				nil,
-				elem.Text("StealthScale should now be working on your tvOS device"),
+				elem.Text("Coordination Server should now be working on your tvOS device"),
 			),
 		),
 	)

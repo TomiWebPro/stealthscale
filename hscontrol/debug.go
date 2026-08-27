@@ -5,9 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
-	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -22,28 +20,18 @@ import (
 )
 
 // protectedDebugHandler wraps an [http.Handler] with an access check that
-// allows requests from loopback, Tailscale CGNAT IPs, and private
-// (RFC 1918 / RFC 4193) addresses. This extends [tsweb.Protected] which
-// only allows loopback and Tailscale IPs.
+// allows requests only from loopback and Tailscale CGNAT IPs (via
+// [tsweb.AllowDebugAccess]). Previously the handler additionally trusted any
+// RFC 1918 / private-LAN source address, which let any host on a LAN reach
+// debug/metrics and dump the full node store, policy and topology. That trust
+// is removed: debug endpoints are only reachable from loopback or a Tailscale
+// IP, never from an arbitrary private network.
 func protectedDebugHandler(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if tsweb.AllowDebugAccess(r) {
 			h.ServeHTTP(w, r)
 
 			return
-		}
-
-		// [tsweb.AllowDebugAccess] rejects X-Forwarded-For and non-TS IPs.
-		// Additionally allow private/LAN addresses so operators can reach
-		// debug endpoints from their local network without tailscaled.
-		ipStr, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err == nil {
-			ip, parseErr := netip.ParseAddr(ipStr)
-			if parseErr == nil && ip.IsPrivate() {
-				h.ServeHTTP(w, r)
-
-				return
-			}
 		}
 
 		http.Error(w, "debug access denied", http.StatusForbidden)

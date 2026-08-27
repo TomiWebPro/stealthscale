@@ -1,4 +1,4 @@
-# This file defines a Nix package for stealthscale.
+# This file defines a Nix package for the coordination server.
 # Ultimately, this should go to nixpkgs.
 
 { lib, pkgs, ... }:
@@ -100,7 +100,7 @@ in rec {
   # Add entry to build a docker image with stealthscale
   # nix build .#stealthscale-docker
   stealthscale-docker = pkgs.dockerTools.buildLayeredImage {
-    name = "stealthscale";
+    name = "coordination";
     tag = version;
     contents = [ stealthscale ];
     config.Entrypoint = [ "/bin/sh" ];

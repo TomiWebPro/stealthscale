@@ -1,5 +1,5 @@
 #!/bin/sh
-# prerm script for stealthscale.
+# prerm script for the coordination service.
 
 set -e
 

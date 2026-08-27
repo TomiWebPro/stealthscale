@@ -63,7 +63,7 @@ func TestAuthErrorTemplate(t *testing.T) {
 
 			// Verify SVG elements are present
 			assert.Contains(t, html, "<svg")
-			assert.Contains(t, html, "class=\"stealthscale-logo\"")
+			assert.Contains(t, html, "class=\"app-logo\"")
 			assert.Contains(t, html, "id=\"error-icon\"")
 
 			// Verify no success checkbox icon
@@ -128,7 +128,7 @@ func TestAuthSuccessTemplate(t *testing.T) {
 
 			// Verify SVG elements are present
 			assert.Contains(t, html, "<svg")
-			assert.Contains(t, html, "class=\"stealthscale-logo\"")
+			assert.Contains(t, html, "class=\"app-logo\"")
 			assert.Contains(t, html, "id=\"checkbox\"")
 		})
 	}

@@ -31,6 +31,7 @@ import (
 	apiv2 "github.com/tomiwebpro/stealthscale/hscontrol/api/v2"
 	"github.com/tomiwebpro/stealthscale/hscontrol/capver"
 	"github.com/tomiwebpro/stealthscale/hscontrol/db"
+	"github.com/tomiwebpro/stealthscale/hscontrol/stealth"
 	"github.com/tomiwebpro/stealthscale/hscontrol/derp"
 	derpServer "github.com/tomiwebpro/stealthscale/hscontrol/derp/server"
 	"github.com/tomiwebpro/stealthscale/hscontrol/dns"
@@ -420,16 +421,61 @@ func (h *StealthScale) ensureUnixSocketIsAbsent() error {
 	return os.Remove(h.cfg.UnixSocket)
 }
 
-// securityHeaders sets baseline response headers on every HTTP response:
+// controlPlanePaths are the Tailscale/Headscale control-protocol endpoints.
+// We deliberately do NOT emit security headers on these: the extra
+// X-Frame-Options / CSP / X-Content-Type-Options headers are themselves a
+// fingerprint that distinguishes this server from a benign website, and the
+// control protocol is machine-to-machine and needs no browser hardening.
+var controlPlanePaths = map[string]bool{
+	ts2021UpgradePath:       true,
+	"/key":                  true,
+	"/derp":                 true,
+	"/derp/probe":           true,
+	"/derp/latency-check":   true,
+	"/bootstrap-dns":        true,
+	"/machine/ping-response": true,
+	"/health":               true,
+	"/version":              true,
+	"/register":             true,
+	"/auth":                 true,
+	"/oidc/callback":        true,
+	"/apple":                true,
+	"/windows":              true,
+	"/verify":               true,
+	"/api":                  true,
+	"/robots.txt":           true,
+}
+
+// securityHeaders sets baseline response headers on HTML/UI responses:
 // deny framing (clickjacking), forbid MIME-type sniffing, drop the Referer
-// header on outbound navigation. Cheap defense-in-depth for HTML surfaces.
+// header on outbound navigation. Cheap defense-in-depth for human-facing
+// surfaces. It is intentionally skipped on the machine control-protocol paths
+// so those do not advertise a browser-oriented header set (a fingerprint).
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if controlPlanePaths[r.URL.Path] {
+			next.ServeHTTP(w, r)
+			return
+		}
 		h := w.Header()
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Content-Security-Policy", "frame-ancestors 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// gateDERPOnStealth wraps a DERP handler so it only answers while the stealth
+// transport is satisfied; otherwise it refuses (fail-closed) to avoid leaking
+// the fingerprintable DERP protocol on the public control port when stealth is
+// not actually serving.
+func (h *StealthScale) gateDERPOnStealth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !derp.ShouldIncludeDERP(h.cfg) {
+			http.Error(w, "stealth transport not satisfied", http.StatusMisdirectedRequest)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -468,8 +514,18 @@ func (h *StealthScale) createRouter(apiV1Mux, apiV2Mux http.Handler) *chi.Mux {
 	// browser/WASM client's WebSocket GET upgrade; NoiseUpgradeHandler
 	// dispatches on the Upgrade header, not the method. Registering GET as
 	// well keeps the router from rejecting the WebSocket handshake with 405.
-	r.Get(ts2021UpgradePath, h.NoiseUpgradeHandler)
-	r.Post(ts2021UpgradePath, h.NoiseUpgradeHandler)
+	//
+	// When stealth control enforcement is enabled the legacy Noise registration
+	// endpoint is removed from the public router so nodes can only register
+	// over the stealth VLESS transport (fail-closed for the control plane).
+	stealthControlOnly := h.cfg.XRay.Enabled && h.cfg.XRay.Stealth.EnforceControl
+	if !stealthControlOnly {
+		r.Get(ts2021UpgradePath, h.NoiseUpgradeHandler)
+		r.Post(ts2021UpgradePath, h.NoiseUpgradeHandler)
+	} else {
+		log.Warn().
+			Msg("stealth: legacy /ts2021 Noise registration disabled (xray.stealth.enforce_control); nodes must register over VLESS")
+	}
 
 	r.Get("/robots.txt", h.RobotsHandler)
 	r.Get("/health", h.HealthHandler)
@@ -490,10 +546,27 @@ func (h *StealthScale) createRouter(apiV1Mux, apiV2Mux http.Handler) *chi.Mux {
 	r.Post("/verify", h.VerifyHandler)
 
 	if h.cfg.DERP.ServerEnabled {
-		r.HandleFunc("/derp", h.DERPServer.DERPHandler)
-		r.HandleFunc("/derp/probe", derpServer.DERPProbeHandler)
-		r.HandleFunc("/derp/latency-check", derpServer.DERPProbeHandler)
-		r.HandleFunc("/bootstrap-dns", derpServer.DERPBootstrapDNSHandler(h.state.DERPMap()))
+		// When stealth enforcement is on, the relay is only reachable while the
+		// stealth transport is actually serving (fail-closed). This prevents the
+		// stock Tailscale DERP protocol from being exposed on the public control
+		// port if the stealth transport is down.
+		var derpHandler http.Handler = http.HandlerFunc(h.DERPServer.DERPHandler)
+		var derpProbe http.Handler = http.HandlerFunc(derpServer.DERPProbeHandler)
+		var derpLatency http.Handler = http.HandlerFunc(derpServer.DERPProbeHandler)
+		var derpBootstrap http.Handler = http.HandlerFunc(
+			derpServer.DERPBootstrapDNSHandler(h.state.DERPMap()),
+		)
+		if h.cfg.XRay.Stealth.Enforce {
+			gate := h.gateDERPOnStealth
+			derpHandler = gate(derpHandler)
+			derpProbe = gate(derpProbe)
+			derpLatency = gate(derpLatency)
+			derpBootstrap = gate(derpBootstrap)
+		}
+		r.Handle("/derp", derpHandler)
+		r.Handle("/derp/probe", derpProbe)
+		r.Handle("/derp/latency-check", derpLatency)
+		r.Handle("/bootstrap-dns", derpBootstrap)
 	}
 
 	// Auth is enforced inside each Huma mux per-operation, so the whole API
@@ -544,7 +617,7 @@ func (h *StealthScale) Serve() error {
 	}
 
 	versionInfo := types.GetVersionInfo()
-	log.Info().Str("version", versionInfo.Version).Str("commit", versionInfo.Commit).Msg("starting stealthscale")
+	log.Info().Str("version", versionInfo.Version).Str("commit", versionInfo.Commit).Msg("coordination server starting")
 	log.Info().
 		Str("minimum_version", capver.TailscaleVersion(capver.MinSupportedCapabilityVersion)).
 		Msg("Clients with a lower minimum version will be rejected")
@@ -617,9 +690,20 @@ func (h *StealthScale) Serve() error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Register the runtime stealth checker so DERP fallback is gated on the
+	// stealth transport actually serving (fail-closed). Only enforce when
+	// stealth enforcement is enabled.
+	if h.cfg.XRay.Enabled && h.cfg.XRay.Stealth.Enforce {
+		derp.SetStealthChecker(stealth.New(&h.cfg.XRay))
+		defer derp.SetStealthChecker(nil)
+	}
+
 	if err := h.StartXRayServer(ctx); err != nil {
 		return fmt.Errorf("starting xray server: %w", err)
 	}
+	// The stealth transport is now serving; lift the fail-closed DERP gate.
+	derp.MarkStealthReady()
+
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), types.HTTPTimeout)
 		defer shutdownCancel()
@@ -877,7 +961,7 @@ func (h *StealthScale) Serve() error {
 				}
 
 				log.Info().
-					Msg("StealthScale stopped")
+					Msg("coordination server stopped")
 
 				return
 			}

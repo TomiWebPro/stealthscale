@@ -209,7 +209,7 @@ input:focus-visible {
 }
 
 /* Logo */
-.stealthscale-logo {
+.app-logo {
   display: block;
   width: 400px;
   max-width: 100%;
@@ -219,7 +219,7 @@ input:focus-visible {
 }
 
 @media (max-width: 768px) {
-  .stealthscale-logo {
+  .app-logo {
     width: 200px;
   }
 }

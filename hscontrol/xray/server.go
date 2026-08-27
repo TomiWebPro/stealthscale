@@ -1,25 +1,26 @@
 // Copyright (c) 2026 TomiWebPro <TomiWebPro@gmail.com>
 // SPDX-License-Identifier: BSD-3-Clause
+//
+// XTLS-Reality server via github.com/xtls/reality (MPL-2.0, Copyright (c) 2023 RPRX)
+// and uTLS via github.com/refraction-networking/utls (BSD-3-Clause).
+// See LICENSE (Third-Party Licenses).
 
 package xray
 
 import (
 	"bufio"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
+	"encoding/hex"
 	"fmt"
-	"math/big"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
+	reality "github.com/xtls/reality"
+	utls "github.com/refraction-networking/utls"
 	"github.com/rs/zerolog/log"
 
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
@@ -42,10 +43,10 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 // check, the raw stream is handed to the handler, which runs the Tailscale
 // noise protocol over it.
 type Server struct {
-	cfg     *types.XRayConfig
-	handler func(net.Conn)
-
-	tlsConfig *tls.Config
+	cfg           *types.XRayConfig
+	handler       func(net.Conn)
+	tlsConfig     *utls.Config
+	realityConfig *reality.Config
 
 	mu        sync.Mutex
 	listeners map[types.NodeID]*nodeListener
@@ -67,8 +68,10 @@ type nodeListener struct {
 //   - none: plain VLESS
 //   - tls/xtls: TLS-wrapped VLESS (requires cert_file/key_file)
 //   - reality_xtls: VLESS+Reality via XTLS+uTLS (default, stealth). Reality
-//     mimics a legitimate dest site; uTLS shapes ClientHello. No cert required
-//     when Reality dest is configured.
+//     steals the dest site's TLS handshake; uTLS shapes ClientHello. The real
+//     Reality implementation (github.com/xtls/reality, MPL-2.0) is used on the
+//     server and a lightweight vendored client (reality_client.go) on the
+//     client side.
 func NewServer(cfg *types.XRayConfig, handler func(net.Conn)) (*Server, error) {
 	s := &Server{
 		cfg:       cfg,
@@ -84,57 +87,51 @@ func NewServer(cfg *types.XRayConfig, handler func(net.Conn)) (*Server, error) {
 
 	switch security {
 	case "tls", "xtls":
-		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+		cert, err := utls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("loading xray TLS credentials: %w", err)
 		}
-		s.tlsConfig = &tls.Config{
-			Certificates: []tls.Certificate{cert},
+		s.tlsConfig = &utls.Config{
+			Certificates: []utls.Certificate{cert},
 			MinVersion:   tls.VersionTLS12,
 		}
+		applyUTLSFingerprint(s.tlsConfig, cfg.UTLSFingerprint)
 	case "reality_xtls":
-		// Reality_XTLS: stealth transport. If cert files are provided, use them
-		// as fallback; otherwise operate with Reality dest simulation via
-		// generated cert and uTLS fingerprint shaping.
+		// If operator explicitly supplied a TLS cert, honour it as a plain TLS
+		// fallback (old behaviour). Otherwise configure true Reality.
 		if cfg.CertFile != "" && cfg.KeyFile != "" {
-			cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+			cert, err := utls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
 			if err != nil {
 				return nil, fmt.Errorf("loading xray TLS credentials for reality_xtls: %w", err)
 			}
-			s.tlsConfig = &tls.Config{
-				Certificates: []tls.Certificate{cert},
+			s.tlsConfig = &utls.Config{
+				Certificates: []utls.Certificate{cert},
 				MinVersion:   tls.VersionTLS12,
 			}
 			applyUTLSFingerprint(s.tlsConfig, cfg.UTLSFingerprint)
+			log.Warn().Msg("xray: reality_xtls with explicit cert_file/key_file — using TLS fallback; for true Reality unset cert_file")
 		} else {
-			// Reality without local cert: generate ephemeral self-signed for dest
-			// and shape ClientHello via uTLS fingerprint. This is real
-			// stealth, not a stub — the handshake mimics the dest site.
-			cfgFP := cfg.UTLSFingerprint
-			if cfgFP == "" {
-				cfgFP = "chrome"
-			}
-			dest := cfg.Reality.Dest
-			if dest == "" {
-				dest = "www.microsoft.com:443"
-			}
-			tlsCfg, err := realityTLSConfig(dest, cfgFP)
+			rc, err := buildRealityConfig(cfg)
 			if err != nil {
-				// Fall back to dest-less config with fingerprint only.
-				tlsCfg = &tls.Config{MinVersion: tls.VersionTLS12}
-				applyUTLSFingerprint(tlsCfg, cfgFP)
+				return nil, fmt.Errorf("building reality config: %w", err)
 			}
-			s.tlsConfig = tlsCfg
+			s.realityConfig = rc
+			// Prime the global post-handshake lens cache so the first client
+			// handshake doesn't block waiting for dest probing. This dials the
+			// dest in the background using utls (same as xray's NewListener).
+			go reality.DetectPostHandshakeRecordsLens(rc)
+			fp := cfg.UTLSFingerprint
+			if fp == "" {
+				fp = "chrome"
+			}
+			log.Info().
+				Str("security", "reality_xtls").
+				Str("utls", fp).
+				Str("reality_dest", rc.Dest).
+				Strs("server_names", cfg.Reality.ServerNames).
+				Str("short_id", cfg.Reality.ShortID).
+				Msg("xray: reality_xtls stealth transport enabled (xtls/reality)")
 		}
-		fp := cfg.UTLSFingerprint
-		if fp == "" {
-			fp = "chrome"
-		}
-		log.Info().
-			Str("security", "reality_xtls").
-			Str("utls", fp).
-			Str("reality_dest", cfg.Reality.Dest).
-			Msg("xray: reality_xtls stealth transport enabled (uTLS ClientHello)")
 	case "none", "":
 		// no TLS
 	default:
@@ -144,7 +141,108 @@ func NewServer(cfg *types.XRayConfig, handler func(net.Conn)) (*Server, error) {
 	return s, nil
 }
 
-func applyUTLSFingerprint(cfg *tls.Config, fp string) {
+func buildRealityConfig(cfg *types.XRayConfig) (*reality.Config, error) {
+	dest := cfg.Reality.Dest
+	if dest == "" {
+		dest = "www.cloudflare.com:443"
+	}
+	// Normalise dest to host:port
+	if !strings.Contains(dest, ":") {
+		dest += ":443"
+	}
+	if strings.Contains(dest, "://") {
+		if h, err := parseDestHost(dest); err == nil {
+			dest = h
+			if !strings.Contains(dest, ":") {
+				dest += ":443"
+			}
+		}
+	}
+	privHex := cfg.Reality.PrivateKey
+	var privBytes []byte
+	if privHex == "" {
+		// No key derived (e.g. test without InitIdentity). Generate ephemeral
+		// so the transport still works; production always has a persistent key
+		// via XRayConfig.InitIdentity.
+		privBytes = make([]byte, 32)
+		if _, err := rand.Read(privBytes); err != nil {
+			return nil, fmt.Errorf("generating ephemeral reality key: %w", err)
+		}
+	} else {
+		b, err := hex.DecodeString(privHex)
+		if err != nil {
+			return nil, fmt.Errorf("invalid reality private key hex: %w", err)
+		}
+		if len(b) != 32 {
+			return nil, fmt.Errorf("reality private key must be 32 bytes, got %d", len(b))
+		}
+		privBytes = b
+	}
+	serverNames := make(map[string]bool)
+	for _, sn := range cfg.Reality.ServerNames {
+		sn = strings.TrimSpace(sn)
+		if sn != "" {
+			serverNames[sn] = true
+		}
+	}
+	if len(serverNames) == 0 {
+		// Fallback decoys — both cloudflare and microsoft as requested.
+		for _, sn := range []string{"www.cloudflare.com", "www.microsoft.com", "cloudflare.com", "microsoft.com"} {
+			serverNames[sn] = true
+		}
+	}
+	shortIds := make(map[[8]byte]bool)
+	ids := cfg.Reality.ShortIDs
+	if len(ids) == 0 && cfg.Reality.ShortID != "" {
+		ids = []string{cfg.Reality.ShortID}
+	}
+	for _, sidHex := range ids {
+		sidHex = strings.TrimSpace(sidHex)
+		if sidHex == "" {
+			// Empty shortId is allowed in xray when config.ShortIds contains "".
+			// That maps to [8]byte{} (all zeros). Include it.
+			var zero [8]byte
+			shortIds[zero] = true
+			continue
+		}
+		b, err := hex.DecodeString(sidHex)
+		if err != nil {
+			// Skip malformed entries but log
+			log.Warn().Str("short_id", sidHex).Msg("xray: skipping invalid reality short_id")
+			continue
+		}
+		var arr [8]byte
+		copy(arr[:], b)
+		shortIds[arr] = true
+	}
+	if len(shortIds) == 0 {
+		// At least allow the derived shortId
+		if cfg.Reality.ShortID != "" {
+			if b, err := hex.DecodeString(cfg.Reality.ShortID); err == nil {
+				var arr [8]byte
+				copy(arr[:], b)
+				shortIds[arr] = true
+			}
+		}
+	}
+
+	show := false
+	rc := &reality.Config{
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, address)
+		},
+		Type:        "tcp",
+		Dest:        dest,
+		ServerNames: serverNames,
+		PrivateKey:  privBytes,
+		ShortIds:    shortIds,
+		Show:        show,
+	}
+	return rc, nil
+}
+
+func applyUTLSFingerprint(cfg *utls.Config, fp string) {
 	switch strings.ToLower(fp) {
 	case "chrome", "":
 		cfg.CipherSuites = []uint16{
@@ -158,7 +256,7 @@ func applyUTLSFingerprint(cfg *tls.Config, fp string) {
 			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
 			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
 		}
-		cfg.CurvePreferences = []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384}
+		cfg.CurvePreferences = []utls.CurveID{utls.X25519, utls.CurveP256, utls.CurveP384}
 	case "firefox":
 		cfg.CipherSuites = []uint16{
 			tls.TLS_AES_128_GCM_SHA256,
@@ -169,7 +267,7 @@ func applyUTLSFingerprint(cfg *tls.Config, fp string) {
 			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
 			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
 		}
-		cfg.CurvePreferences = []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384, tls.CurveP521}
+		cfg.CurvePreferences = []utls.CurveID{utls.X25519, utls.CurveP256, utls.CurveP384, utls.CurveP521}
 	case "safari":
 		cfg.CipherSuites = []uint16{
 			tls.TLS_AES_128_GCM_SHA256,
@@ -178,7 +276,7 @@ func applyUTLSFingerprint(cfg *tls.Config, fp string) {
 			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
 		}
-		cfg.CurvePreferences = []tls.CurveID{tls.X25519, tls.CurveP256}
+		cfg.CurvePreferences = []utls.CurveID{utls.X25519, utls.CurveP256}
 	case "randomized":
 		// Randomized mimics Chrome but shuffles order for anti-fingerprinting.
 		cfg.CipherSuites = []uint16{
@@ -187,7 +285,7 @@ func applyUTLSFingerprint(cfg *tls.Config, fp string) {
 			tls.TLS_AES_256_GCM_SHA384,
 			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
 		}
-		cfg.CurvePreferences = []tls.CurveID{tls.X25519, tls.CurveP256}
+		cfg.CurvePreferences = []utls.CurveID{utls.X25519, utls.CurveP256}
 	default:
 		// Unknown fingerprint defaults to Chrome.
 		cfg.CipherSuites = []uint16{
@@ -195,60 +293,8 @@ func applyUTLSFingerprint(cfg *tls.Config, fp string) {
 			tls.TLS_AES_256_GCM_SHA384,
 			tls.TLS_CHACHA20_POLY1305_SHA256,
 		}
-		cfg.CurvePreferences = []tls.CurveID{tls.X25519, tls.CurveP256}
+		cfg.CurvePreferences = []utls.CurveID{utls.X25519, utls.CurveP256}
 	}
-}
-
-func realityTLSConfig(dest, fingerprint string) (*tls.Config, error) {
-	host := dest
-	if strings.Contains(host, "://") {
-		if u, err := parseDestHost(dest); err == nil {
-			host = u
-		}
-	}
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	// Generate ephemeral ECDSA cert for SNI host.
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, err
-	}
-	template := x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: host},
-		DNSNames:     []string{host},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
-	if err != nil {
-		return nil, err
-	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyDER, err := x509.MarshalECPrivateKey(priv)
-	if err != nil {
-		return nil, err
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	cert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return nil, err
-	}
-	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-		NextProtos:   []string{"h2", "http/1.1"},
-		ServerName:   host,
-	}
-	applyUTLSFingerprint(tlsCfg, fingerprint)
-	return tlsCfg, nil
 }
 
 func parseDestHost(dest string) (string, error) {
@@ -278,12 +324,17 @@ func (s *Server) NodeConfig(nodeID types.NodeID) *VLESSConfig {
 		sec = "reality_xtls"
 	}
 	return &VLESSConfig{
-		ID:       NodeUUID(nodeID),
-		Network:  "tcp",
-		Address:  s.cfg.ListenAddr,
-		Port:     NodePort(nodeID, s.cfg.BaseListenPort, s.cfg.MaxListenPort),
-		Security: sec,
-		Timeout:  s.cfg.Timeout,
+		ID:        NodeUUID(nodeID, s.cfg.Secret),
+		Network:   "tcp",
+		Address:   s.cfg.ListenAddr,
+		Port:      NodePort(nodeID, s.cfg.Secret, s.cfg.BaseListenPort, s.cfg.MaxListenPort),
+		Security:  sec,
+		Timeout:   s.cfg.Timeout,
+		Dest:      s.cfg.Reality.Dest,
+		FP:        s.cfg.UTLSFingerprint,
+		PublicKey: s.cfg.Reality.PublicKey,
+		ShortID:   s.cfg.Reality.ShortID,
+		SpiderX:   s.cfg.Reality.SpiderX,
 	}
 }
 
@@ -374,23 +425,28 @@ func (s *Server) acceptLoop(ctx context.Context, nl *nodeListener) {
 func (s *Server) handleConn(ctx context.Context, nodeID types.NodeID, conn net.Conn) {
 	defer conn.Close()
 
-	// Reality_XTLS stealth path: if enabled but tlsConfig is nil, the Reality
-	// dest simulacrum is used — we still perform a lightweight stealth probe
-	// before handing to VLESS. This keeps the flow indistinguishable from a
-	// legitimate TLS site to observers.
 	security := s.cfg.Security
 	if security == "reality" {
 		security = "reality_xtls"
 	}
-	if s.tlsConfig != nil {
+	// Reality path uses xtls/reality which steals the dest handshake;
+	// plain tls/xtls path uses utls.
+	if s.realityConfig != nil && security == "reality_xtls" {
+		rConn, err := reality.Server(ctx, conn, s.realityConfig)
+		if err != nil {
+			log.Error().Err(err).Uint64("node_id", uint64(nodeID)).Msg("xray: Reality handshake failed")
+			return
+		}
+		conn = rConn
+	} else if s.tlsConfig != nil {
 		if security == "reality_xtls" {
 			log.Debug().
 				Uint64("node_id", uint64(nodeID)).
 				Str("utls", s.cfg.UTLSFingerprint).
 				Str("reality_dest", s.cfg.Reality.Dest).
-				Msg("xray: reality_xtls stealth handshake")
+				Msg("xray: reality_xtls fallback TLS handshake")
 		}
-		tlsConn := tls.Server(conn, s.tlsConfig)
+		tlsConn := utls.Server(conn, s.tlsConfig)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			log.Error().Err(err).Uint64("node_id", uint64(nodeID)).Msg("xray: TLS handshake failed")
 			return
@@ -413,7 +469,7 @@ func (s *Server) handleConn(ctx context.Context, nodeID types.NodeID, conn net.C
 	// indefinitely.
 	_ = conn.SetDeadline(time.Time{})
 
-	expected := NodeUUID(nodeID)
+	expected := NodeUUID(nodeID, s.cfg.Secret)
 	if clientUUID != expected {
 		log.Warn().
 			Uint64("node_id", uint64(nodeID)).

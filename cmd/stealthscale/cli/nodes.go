@@ -314,13 +314,18 @@ var nodeVLESSCommand = &cobra.Command{
 			return fmt.Errorf("invalid node ID: %w", err)
 		}
 
+		secret, publicKey, shortID, dest := types.ResolveXRayIdentity()
 		config := &xray.VLESSConfig{
-			ID:       xray.NodeUUID(nodeID),
-			Network:  "tcp",
-			Address:  viper.GetString("xray.listen_addr"),
-			Port:     xray.NodePort(nodeID, viper.GetInt("xray.listen_port"), viper.GetInt("xray.max_listen_port")),
-			Security: viper.GetString("xray.security"),
-			Timeout:  viper.GetDuration("xray.timeout"),
+			ID:        xray.NodeUUID(nodeID, secret),
+			Network:   "tcp",
+			Address:   viper.GetString("xray.listen_addr"),
+			Port:      xray.NodePort(nodeID, secret, viper.GetInt("xray.listen_port"), viper.GetInt("xray.max_listen_port")),
+			Security:  viper.GetString("xray.security"),
+			Timeout:   viper.GetDuration("xray.timeout"),
+			Dest:      dest,
+			FP:        viper.GetString("xray.utls_fingerprint"),
+			PublicKey: publicKey,
+			ShortID:   shortID,
 		}
 
 		if err := config.Validate(); err != nil {

@@ -41,3 +41,56 @@ Modifications include:
 - Enhanced obfuscation capabilities to evade deep packet inspection
 
 See README.md for build and usage instructions.
+
+---
+
+Third-Party Licenses
+--------------------
+
+StealthScale bundles and/or links the following third-party components.
+Their licences are reproduced below or at the indicated source. The
+main StealthScale licence above (BSD-3-Clause) applies only to the
+StealthScale-originated files; the third-party components remain under
+their own licences and are not re-licensed.
+
+1. github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f
+   Copyright (c) 2023 RPRX
+   License: Mozilla Public License 2.0 (MPL-2.0)
+   Source: https://github.com/xtls/reality
+   Used as: XTLS-Reality server (steals the decoy dest's TLS handshake;
+            fork of Go's crypto/tls). The forked crypto/tls files retain
+   their original BSD-3-Clause (The Go Authors) as noted in LICENSE-Go.
+   Full MPL-2.0 text: https://mozilla.org/MPL/2.0/
+
+2. github.com/XTLS/Xray-core (transport/internet/reality)
+   Copyright XTLS
+   License: Mozilla Public License 2.0 (MPL-2.0)
+   Source: https://github.com/XTLS/Xray-core
+   Used as: Reference for the lightweight Reality client port in
+            hscontrol/xray/reality_client.go (UClient, VerifyPeerCertificate,
+            SessionId/AEAD logic). That file is a clean-room Go port of the
+            Xray-core logic and does not copy Xray-core's protobuf or
+            framework code.
+
+3. github.com/refraction-networking/utls v1.8.2
+   Copyright The Go Authors and Refraction Networking contributors
+   License: BSD 3-Clause (same terms as Go's crypto/tls) + MIT for the
+            utls wrapping (see https://github.com/refraction-networking/utls/blob/master/LICENSE)
+   Source: https://github.com/refraction-networking/utls
+   Used as: uTLS ClientHello fingerprinting (HelloChrome_Auto etc.)
+
+4. Go's crypto/tls (standard library, forked in xtls/reality and utls)
+   Copyright (c) 2009 The Go Authors
+   License: BSD 3-Clause (see LICENSE-Go in xtls/reality or Go's LICENSE)
+   Source: https://go.googlesource.com/go
+
+All MPL-2.0 components are used as libraries (imported via go.mod) and
+are not modified in-place. Per MPL-2.0 §3.3, the Larger Work (StealthScale,
+BSD-3-Clause) may be distributed under BSD-3-Clause while the MPL-2.0
+files remain under MPL-2.0. Corresponding source for the MPL-2.0
+components is available at the Source URLs above and via `go mod download`.
+
+MPL-2.0 attribution notice (Exhibit A):
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at http://mozilla.org/MPL/2.0/.

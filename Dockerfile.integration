@@ -1,8 +1,8 @@
-# This Dockerfile and the images produced are for testing stealthscale,
-# and are in no way endorsed by the original stealthscale maintainers as an
+# This Dockerfile and the images produced are for testing the coordination
+# server, and are in no way endorsed by the original maintainers as an
 # official nor supported release or distribution.
-# 
-# This is a modified version of stealthscale that uses Xray/VLESS for
+#
+# This is a modified version of the server that uses Xray/VLESS for
 # node-to-node communication to bypass network restrictions.
 
 FROM docker.io/golang:1.26.5-trixie AS builder

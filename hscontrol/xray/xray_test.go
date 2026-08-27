@@ -7,9 +7,17 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	cryptorand "crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"testing"
 	"time"
@@ -17,18 +25,24 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	reality "github.com/xtls/reality"
 
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
 )
 
+func primeRealityLens(key string) {
+	reality.GlobalPostHandshakeRecordsLens.Store(key, []int{})
+	reality.GlobalMaxCSSMsgCount.Store(key, 1)
+}
+
 func TestNodeUUIDDeterministic(t *testing.T) {
 	id := types.NodeID(42)
 
-	first := NodeUUID(id)
-	second := NodeUUID(id)
+	first := NodeUUID(id, "")
+	second := NodeUUID(id, "")
 
 	assert.Equal(t, first, second, "UUID must be stable across calls")
-	assert.NotEqual(t, NodeUUID(types.NodeID(43)), first, "different nodes must get different UUIDs")
+	assert.NotEqual(t, NodeUUID(types.NodeID(43), ""), first, "different nodes must get different UUIDs")
 
 	parsed, err := uuid.FromString(first)
 	require.NoError(t, err, "UUID must be a valid UUID")
@@ -39,8 +53,8 @@ func TestNodePortDeterministic(t *testing.T) {
 	minPort, maxPort := 10001, 10100
 	id := types.NodeID(7)
 
-	first := NodePort(id, minPort, maxPort)
-	second := NodePort(id, minPort, maxPort)
+	first := NodePort(id, "", minPort, maxPort)
+	second := NodePort(id, "", minPort, maxPort)
 
 	assert.Equal(t, first, second, "port must be stable across calls")
 	assert.GreaterOrEqual(t, first, minPort)
@@ -48,7 +62,7 @@ func TestNodePortDeterministic(t *testing.T) {
 
 	ports := make(map[int]bool)
 	for i := 1; i <= 50; i++ {
-		p := NodePort(types.NodeID(i), minPort, maxPort)
+		p := NodePort(types.NodeID(i), "", minPort, maxPort)
 		assert.GreaterOrEqual(t, p, minPort)
 		assert.LessOrEqual(t, p, maxPort)
 		ports[p] = true
@@ -57,13 +71,13 @@ func TestNodePortDeterministic(t *testing.T) {
 }
 
 func TestNodePortDegenerateRange(t *testing.T) {
-	assert.Equal(t, 443, NodePort(types.NodeID(1), 443, 443))
+	assert.Equal(t, 443, NodePort(types.NodeID(1), "", 443, 443))
 }
 
 func vlessHeader(t *testing.T, nodeID types.NodeID) []byte {
 	t.Helper()
 
-	u, err := uuid.FromString(NodeUUID(nodeID))
+	u, err := uuid.FromString(NodeUUID(nodeID, ""))
 	require.NoError(t, err)
 
 	header := make([]byte, 1+vlessUUIDLen+vlessAddonsLenLen)
@@ -83,7 +97,7 @@ func TestParseVLESSRequest(t *testing.T) {
 
 	clientUUID, rest, err := ParseVLESSRequest(stream)
 	require.NoError(t, err)
-	assert.Equal(t, NodeUUID(nodeID), clientUUID)
+	assert.Equal(t, NodeUUID(nodeID, ""), clientUUID)
 
 	got, err := io.ReadAll(rest)
 	require.NoError(t, err)
@@ -92,7 +106,7 @@ func TestParseVLESSRequest(t *testing.T) {
 
 func TestParseVLESSRequestRejectsBadVersion(t *testing.T) {
 	nodeID := types.NodeID(99)
-	u, err := uuid.FromString(NodeUUID(nodeID))
+	u, err := uuid.FromString(NodeUUID(nodeID, ""))
 	require.NoError(t, err)
 
 	stream := bytes.NewReader(append([]byte{1}, append(u.Bytes(), 0)...))
@@ -103,7 +117,7 @@ func TestParseVLESSRequestRejectsBadVersion(t *testing.T) {
 
 func TestParseVLESSRequestSkipsAddons(t *testing.T) {
 	nodeID := types.NodeID(99)
-	u, err := uuid.FromString(NodeUUID(nodeID))
+	u, err := uuid.FromString(NodeUUID(nodeID, ""))
 	require.NoError(t, err)
 
 	// addon: command (tcp) + port + addrType (domain) + len + domain
@@ -131,7 +145,7 @@ func TestParseVLESSRequestSkipsAddons(t *testing.T) {
 
 	clientUUID, rest, err := ParseVLESSRequest(stream)
 	require.NoError(t, err)
-	assert.Equal(t, NodeUUID(nodeID), clientUUID)
+	assert.Equal(t, NodeUUID(nodeID, ""), clientUUID)
 
 	got, err := io.ReadAll(rest)
 	require.NoError(t, err)
@@ -272,6 +286,150 @@ func TestServerShutdown(t *testing.T) {
 		require.NoError(t, err)
 	case <-time.After(2 * time.Second):
 		t.Fatal("shutdown did not complete")
+	}
+}
+
+// startLocalRealityDest starts a minimal TLS 1.3 dest server that Reality
+// steals its handshake from. It presents a self-signed cert for both decoys
+// so SNI verification is not a factor. Returns the address (host:port) and a
+// shutdown func.
+func startLocalRealityDest(t *testing.T) (string, func()) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), cryptorand.Reader)
+	require.NoError(t, err)
+	serial, err := cryptorand.Int(cryptorand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	require.NoError(t, err)
+	template := x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "www.cloudflare.com"},
+		DNSNames:     []string{"www.cloudflare.com", "www.microsoft.com", "cloudflare.com", "microsoft.com"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(cryptorand.Reader, &template, &template, &priv.PublicKey, priv)
+	require.NoError(t, err)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyDER, err := x509.MarshalECPrivateKey(priv)
+	require.NoError(t, err)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	require.NoError(t, err)
+
+	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", tlsCfg)
+	require.NoError(t, err)
+	done := make(chan struct{})
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				select {
+				case <-done:
+					return
+				default:
+					continue
+				}
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				// Keep the connection open long enough for Reality to probe it.
+				// The TLS handshake is driven by the peer's ClientHello; we just
+				// wait and discard.
+				_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+				_, _ = io.Copy(io.Discard, c)
+			}(conn)
+		}
+	}()
+	addr := ln.Addr().String()
+	return addr, func() {
+		close(done)
+		ln.Close()
+	}
+}
+
+// TestServerRealityTLSRoundTrip exercises the full Reality path: a server
+// using xtls/reality that steals a local dest's TLS handshake, and a client
+// using the vendored RealityUClient (utls + Reality auth). The handshake must
+// succeed and VLESS payload must round-trip, proving the transport is not
+// silently regressed to the old self-signed decoy.
+func TestServerRealityTLSRoundTrip(t *testing.T) {
+	destAddr, closeDest := startLocalRealityDest(t)
+	defer closeDest()
+
+	cfg := testXRayConfig()
+	cfg.Security = "reality_xtls"
+	cfg.UTLSFingerprint = "chrome"
+	cfg.Reality.Dest = destAddr
+	cfg.Reality.ServerNames = []string{"www.cloudflare.com", "www.microsoft.com", "cloudflare.com", "microsoft.com", "127.0.0.1"}
+	// Derive stable Reality keypair/shortId from an ephemeral secret.
+	// Use a temp dir so InitIdentity persists correctly.
+	tmpDir := t.TempDir()
+	require.NoError(t, cfg.InitIdentity(tmpDir))
+
+	// Prime the global post-handshake lens so the server doesn't block
+	// waiting for DetectPostHandshakeRecordsLens (which would fail against
+	// our self-signed local dest because it verifies the cert). An empty
+	// slice means "no post-handshake records to mimic".
+	for _, sni := range cfg.Reality.ServerNames {
+		for alpn := 0; alpn < 3; alpn++ {
+			key := destAddr + " " + sni + " " + fmt.Sprintf("%d", alpn)
+			// Import is via the reality package's globals — we set them here
+			// to avoid the 5s polling loop in reality.Server.
+			primeRealityLens(key)
+		}
+	}
+
+	nodeID := types.NodeID(2001)
+
+	handlerCalls := make(chan string, 1)
+	server, err := NewServer(&cfg, func(conn net.Conn) {
+		payload, _ := io.ReadAll(conn)
+		if len(payload) > 0 {
+			handlerCalls <- string(payload)
+		}
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer server.Shutdown(context.Background())
+
+	config, err := server.EnsureNodeListener(ctx, nodeID)
+	require.NoError(t, err)
+
+	clientCfg := &VLESSConfig{
+		ID:        NodeUUID(nodeID, cfg.Secret),
+		Network:   "tcp",
+		Address:   cfg.ListenAddr,
+		Port:      config.Port,
+		Security:  "reality_xtls",
+		Timeout:   5 * time.Second,
+		Dest:      destAddr,
+		FP:        "chrome",
+		PublicKey: cfg.Reality.PublicKey,
+		ShortID:   cfg.Reality.ShortID,
+		SpiderX:   "/",
+	}
+
+	conn, err := DialVLESS(context.Background(), clientCfg)
+	require.NoError(t, err, "reality_xtls handshake must succeed with RealityUClient")
+	defer conn.Close()
+
+	_, err = conn.Write([]byte("stealth-payload"))
+	require.NoError(t, err)
+
+	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
+
+	select {
+	case got := <-handlerCalls:
+		assert.Equal(t, "stealth-payload", got)
+	case <-time.After(8 * time.Second):
+		t.Fatal("handler was never invoked over reality_xtls (Reality handshake likely failed)")
 	}
 }
 

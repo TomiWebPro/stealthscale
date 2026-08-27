@@ -9,18 +9,20 @@ package stealth
 
 import (
 	"sync"
-	"time"
 
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
 	"tailscale.com/tailcfg"
 )
 
-// Checker holds stealth verification state.
+// Checker holds stealth verification state. It gates DERP fallback on whether
+// the VLESS+Reality stealth transport is actually serving. When the stealth
+// transport is not ready, DERP is suppressed (fail-closed) so fingerprintable
+// relay traffic never leaks.
 type Checker struct {
-	cfg       *types.XRayConfig
-	mu        sync.RWMutex
-	healthy   bool
-	lastProbe time.Time
+	cfg     *types.XRayConfig
+	mu      sync.RWMutex
+	ready   bool
+	healthy bool
 }
 
 // New creates a Checker from XRay config. If XRay is disabled or stealth
@@ -32,9 +34,18 @@ func New(cfg *types.XRayConfig) *Checker {
 	}
 }
 
+// SetReady records whether the stealth transport is currently serving.
+// app.go calls this after the xray listeners start (or stop). When stealth is
+// enforced and the transport is not ready, DERP fallback is suppressed.
+func (c *Checker) SetReady(ready bool) {
+	c.mu.Lock()
+	c.ready = ready
+	c.mu.Unlock()
+}
+
 // IsSatisfied reports whether stealth is satisfied and DERP fallback is allowed.
-// When Stealth.Enforce is false, always true. When true, health is based on
-// recent probe success and on security being reality_xtls.
+// When Stealth.Enforce is false, always true. When true, DERP is only offered
+// while the reality_xtls transport is actually serving (fail-closed).
 func (c *Checker) IsSatisfied() bool {
 	if c.cfg == nil || !c.cfg.Enabled {
 		return true
@@ -52,31 +63,17 @@ func (c *Checker) IsSatisfied() bool {
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	// If never probed, treat as healthy to avoid cold-start dead-lock,
-	// but after probe interval without success, mark unhealthy.
-	if c.lastProbe.IsZero() {
-		return true
-	}
-	if time.Since(c.lastProbe) > 2*c.cfg.Stealth.ProbeInterval && !c.healthy {
-		return false
-	}
-	return c.healthy
+	return c.ready
 }
 
-// MarkHealthy records a successful stealth probe.
+// MarkHealthy records a successful stealth probe (alias for SetReady(true)).
 func (c *Checker) MarkHealthy() {
-	c.mu.Lock()
-	c.healthy = true
-	c.lastProbe = time.Now()
-	c.mu.Unlock()
+	c.SetReady(true)
 }
 
-// MarkUnhealthy records a failed stealth probe.
+// MarkUnhealthy records a failed stealth probe (alias for SetReady(false)).
 func (c *Checker) MarkUnhealthy() {
-	c.mu.Lock()
-	c.healthy = false
-	c.lastProbe = time.Now()
-	c.mu.Unlock()
+	c.SetReady(false)
 }
 
 // ShouldIncludeDERP reports whether DERP regions should be included in the

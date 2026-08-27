@@ -1,9 +1,17 @@
 ---
-# stealthscale will look for a configuration file named `config.yaml` (or `config.json`) in the following order:
+# The server will look for a configuration file named `config.yaml` (or `config.json`) in the following order:
 #
 # - `/etc/stealthscale`
 # - `~/.stealthscale`
 # - current working directory
+#
+# OPSEC NOTE: the default listen paths, ports and socket names below are the
+# well-known defaults. To reduce the chance of identification on a compromised
+# host, override `listen_addr`, `metrics_listen_addr` and `unix_socket` to
+# non-default values (and non-standard ports). Likewise, keep
+# `derp.server.enabled` set to false unless the embedded relay is only ever
+# reachable behind the stealth (VLESS/Reality) transport; the embedded DERP is
+# gated fail-closed on the stealth check and must not be exposed directly.
 
 # The url clients will connect to.
 # Typically this will be a domain like:
@@ -84,6 +92,15 @@ xray:
   # Enables the VLESS transport listeners (default: true, stealth mode).
   enabled: true
 
+  # Optional per-server secret. If empty (recommended), a secret is generated
+  # and persisted next to the database (e.g. /var/lib/stealthscale/.xray_secret)
+  # on first run. The secret keys the derivation of each node's VLESS UUID and
+  # port and the Reality keypair/short-id, so endpoints are stable across
+  # restarts and cannot be enumerated by an outsider who lacks the secret.
+  # Set this only if you run multiple coordinators that must share one identity,
+  # or use postgres (which has no local secret file).
+  secret: ""
+
   # Address the per-node VLESS listeners bind to.
   listen_addr: 0.0.0.0
 
@@ -109,19 +126,39 @@ xray:
   # uTLS fingerprint to mimic (chrome, firefox, safari). Only with reality_xtls.
   utls_fingerprint: chrome
 
-  # Reality dest (decoy site, e.g. www.microsoft.com:443). If empty, derived
-  # from server_url. Only with reality_xtls.
+  # Reality dest (decoy site). Set to a plausible, real, Internet-reachable
+  # site whose TLS certificate the server steals via XTLS-Reality
+  # (github.com/xtls/reality, MPL-2.0). Use www.cloudflare.com:443 by default
+  # — www.microsoft.com:443's 8273-byte cert exceeds the 8192-byte pre-read
+  # limit (Xray-core#6402). Leave empty to use the default.
+  # Only with reality_xtls.
   reality:
-    dest: ""
-    server_names: []
+    dest: "www.cloudflare.com:443"
+    # SNI values that pass Reality verification. Both decoys are included so a
+    # client can present either SNI and still pass. Empty (default) is expanded
+    # to [www.cloudflare.com, www.microsoft.com, cloudflare.com, microsoft.com].
+    server_names:
+      - www.cloudflare.com
+      - www.microsoft.com
+      - cloudflare.com
+      - microsoft.com
     private_key: ""
     public_key: ""
+    # short_id and short_ids / spider_x are auto-derived from the per-server
+    # secret (xray.secret / .xray_secret) if left empty. short_ids may contain
+    # multiple entries (e.g. ["", "0123456789ab"]) — "" allows an empty shortId.
     short_id: ""
-    spider_x: ""
+    short_ids: []
+    spider_x: "/"
 
   # Stealth: gate DERP fallback on stealth verification (fail-closed if stealth unsatisfied)
   stealth:
     enforce: true
+    # When true, the legacy Tailscale Noise (/ts2021) registration endpoint is
+    # removed from the public router so nodes can only register over the stealth
+    # VLESS transport. Off by default to stay compatible with stock clients;
+    # enable only with a stealth-capable (uTLS-based) client.
+    enforce_control: false
     probe_interval: 30s
     probe_timeout: 5s
 
@@ -176,9 +213,12 @@ derp:
     ipv4: 198.51.100.1
     ipv6: 2001:db8::1
 
-  # List of externally available DERP maps encoded in JSON
-  urls:
-    - https://controlplane.tailscale.com/derpmap/default
+  # No public DERP map is configured by default. Clients rely on the embedded
+  # DERP server only when it is enabled (derp.server.enabled) and only as a
+  # stealth-gated fallback (gated fail-closed on the stealth check). Do not
+  # point this at third-party DERP infrastructure, as that leaks the relay
+  # topology to external parties.
+  urls: []
 
   # Locally available DERP map files encoded in YAML
   #

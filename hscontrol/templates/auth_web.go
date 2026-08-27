@@ -9,7 +9,7 @@ import (
 // It is used by both the registration and auth-approve web handlers.
 func AuthWeb(title, description, command string) *elem.Element {
 	return page(
-		title+" - StealthScale",
+		title+" - Coordination Server",
 		H1(elem.Text(title)),
 		P(elem.Text(description)),
 		codeBlockText(command),

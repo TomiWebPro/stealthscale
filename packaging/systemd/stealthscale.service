@@ -1,18 +1,18 @@
 [Unit]
 After=network.target
-Description=stealthscale coordination server for Tailscale
+Description=Network coordination service
 
 [Service]
 Type=simple
-User=stealthscale
-Group=stealthscale
+User=coordination
+Group=coordination
 ExecStart=/usr/bin/stealthscale serve
 ExecReload=/usr/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
 
-WorkingDirectory=/var/lib/stealthscale
-ReadWritePaths=/var/lib/stealthscale
+WorkingDirectory=/var/lib/coordination
+ReadWritePaths=/var/lib/coordination
 
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
@@ -38,9 +38,9 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
-RuntimeDirectory=stealthscale
+RuntimeDirectory=coordination
 RuntimeDirectoryMode=0750
-StateDirectory=stealthscale
+StateDirectory=coordination
 StateDirectoryMode=0750
 SystemCallArchitectures=native
 SystemCallFilter=@system-service

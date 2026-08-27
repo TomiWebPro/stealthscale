@@ -10,7 +10,7 @@ import (
 // communicate what just happened.
 type AuthSuccessResult struct {
 	// Title is the browser tab / page title,
-	// e.g. "StealthScale - Node Registered".
+	// e.g. "Coordination Server - Node Registered".
 	Title string
 
 	// Heading is the bold green text inside the success box,
@@ -49,7 +49,7 @@ func AuthSuccess(result AuthSuccessResult) *elem.Element {
 		Ul(
 			elem.Li(
 				nil,
-				externalLink("https://stealthscale.net/stable/", "StealthScale documentation"),
+				externalLink("https://stealthscale.net/stable/", "Coordination Server documentation"),
 			),
 			elem.Li(
 				nil,

@@ -53,7 +53,7 @@ func PingPage(query string, result *PingResult, nodes []ConnectedNode) *elem.Ele
 		children = append(children, connectedNodeList(nodes))
 	}
 
-	return page("Ping Node - StealthScale", children...)
+	return page("Ping Node - Coordination Server", children...)
 }
 
 func pingExplanation() *elem.Element {

@@ -1,12 +1,18 @@
 package types
 
 import (
+	"crypto/ecdh"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -199,17 +205,23 @@ type XRayConfig struct {
 
 	// Stealth controls DERP fallback policy.
 	Stealth StealthConfig
+
+	// Secret is the per-server secret used to derive node endpoint UUIDs and
+	// ports. Populated by InitIdentity; do not set directly.
+	Secret string
 }
 
 // RealityConfig holds XTLS-Reality handshake parameters.
 // Reality makes the VLESS endpoint indistinguishable from a legitimate TLS
 // site by performing a Reality handshake to a dest site.
 type RealityConfig struct {
-	// Dest is the decoy destination (e.g. "www.microsoft.com:443").
-	// If empty, derived from server_url.
+	// Dest is the decoy destination (e.g. "www.cloudflare.com:443").
+	// If empty, defaults to www.cloudflare.com:443 (avoids the 8192-byte
+	// microsoft.com cert bug: Xray-core#6402).
 	Dest string `mapstructure:"dest"`
 
 	// ServerNames is the list of SNI values that pass Reality verification.
+	// Defaults to both decoys: www.microsoft.com and www.cloudflare.com (+ bare).
 	ServerNames []string `mapstructure:"server_names"`
 
 	// PrivateKey is the Reality private key (hex). If empty, auto-generated.
@@ -218,8 +230,14 @@ type RealityConfig struct {
 	// PublicKey is the derived public key for clients (hex, auto if empty).
 	PublicKey string `mapstructure:"public_key"`
 
-	// ShortID is the Reality short ID (hex, 0-8 bytes).
+	// ShortID is the Reality short ID (hex, 0-8 bytes). Kept for backward
+	// compat; prefer ShortIDs.
 	ShortID string `mapstructure:"short_id"`
+
+	// ShortIDs is the list of accepted short IDs. When empty but ShortID is
+	// set, it is populated from ShortID. When both empty, an 8-hex-digit id
+	// is derived from the server secret.
+	ShortIDs []string `mapstructure:"short_ids"`
 
 	// SpiderX is the Reality spiderX path prefix.
 	SpiderX string `mapstructure:"spider_x"`
@@ -234,11 +252,139 @@ type StealthConfig struct {
 	// Enforce disables DERP fallback unless stealth checks pass.
 	Enforce bool `mapstructure:"enforce"`
 
+	// EnforceControl disables the legacy plaintext Tailscale Noise (/ts2021)
+	// registration endpoint on the public router, forcing node registration to
+	// occur only over the stealth VLESS transport. Off by default to preserve
+	// compatibility with stock clients; enable only with a stealth-capable
+	// (uTLS-based) client.
+	EnforceControl bool `mapstructure:"enforce_control"`
+
 	// ProbeInterval is how often stealth probes run.
 	ProbeInterval time.Duration `mapstructure:"probe_interval"`
 
 	// ProbeTimeout is the stealth probe timeout.
 	ProbeTimeout time.Duration `mapstructure:"probe_timeout"`
+}
+
+// realityHMAC returns the HMAC-SHA256 of label keyed by the server secret.
+func realityHMAC(secret, label string) []byte {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(label))
+	return mac.Sum(nil)
+}
+
+// InitIdentity loads or creates the per-server secret and derives the Reality
+// keypair/short id from it (when not explicitly configured). The secret is
+// persisted next to the database so endpoint UUIDs/ports stay stable across
+// restarts while remaining uncomputable by an outsider who lacks the secret.
+func (x *XRayConfig) InitIdentity(stateDir string) error {
+	if x.Secret == "" {
+		secret, err := loadOrCreateSecret(stateDir)
+		if err != nil {
+			return err
+		}
+		x.Secret = secret
+	}
+
+	// Derive or normalise the Reality keypair.
+	if x.Reality.PrivateKey == "" {
+		priv := realityHMAC(x.Secret, "reality-priv")
+		if len(priv) > 32 {
+			priv = priv[:32]
+		}
+		pub, err := deriveX25519Public(priv)
+		if err != nil {
+			return fmt.Errorf("deriving reality key: %w", err)
+		}
+		x.Reality.PrivateKey = hex.EncodeToString(priv)
+		x.Reality.PublicKey = hex.EncodeToString(pub)
+	} else if x.Reality.PublicKey == "" {
+		priv, err := hex.DecodeString(x.Reality.PrivateKey)
+		if err != nil {
+			return fmt.Errorf("invalid reality private key: %w", err)
+		}
+		pub, err := deriveX25519Public(priv)
+		if err != nil {
+			return fmt.Errorf("deriving reality public key: %w", err)
+		}
+		x.Reality.PublicKey = hex.EncodeToString(pub)
+	}
+
+	if x.Reality.ShortID == "" {
+		sid := realityHMAC(x.Secret, "reality-sid")
+		if len(sid) > 4 {
+			sid = sid[:4]
+		}
+		x.Reality.ShortID = hex.EncodeToString(sid)
+	}
+	// Normalise ShortIDs / ServerNames decoys (both microsoft+cloudflare).
+	if len(x.Reality.ShortIDs) == 0 && x.Reality.ShortID != "" {
+		x.Reality.ShortIDs = []string{x.Reality.ShortID}
+	} else if len(x.Reality.ShortIDs) == 0 {
+		x.Reality.ShortIDs = []string{x.Reality.ShortID}
+	}
+	// Keep ShortID as first entry for compat.
+	if len(x.Reality.ShortIDs) > 0 && x.Reality.ShortID == "" {
+		x.Reality.ShortID = x.Reality.ShortIDs[0]
+	}
+	if len(x.Reality.ServerNames) == 0 {
+		x.Reality.ServerNames = []string{
+			"www.cloudflare.com",
+			"www.microsoft.com",
+			"cloudflare.com",
+			"microsoft.com",
+		}
+	}
+	if x.Reality.Dest == "" {
+		x.Reality.Dest = "www.cloudflare.com:443"
+	}
+	if x.Reality.SpiderX == "" {
+		x.Reality.SpiderX = "/"
+	}
+
+	return nil
+}
+
+// deriveX25519Public returns the X25519 public key bytes for a 32-byte scalar.
+func deriveX25519Public(scalar []byte) ([]byte, error) {
+	if len(scalar) != 32 {
+		return nil, fmt.Errorf("x25519 scalar must be 32 bytes, got %d", len(scalar))
+	}
+	priv, err := ecdh.X25519().NewPrivateKey(scalar)
+	if err != nil {
+		return nil, err
+	}
+	return priv.PublicKey().Bytes(), nil
+}
+
+// loadOrCreateSecret returns the persisted secret for stateDir, creating one
+// if absent. When stateDir is empty (e.g. postgres without a configured
+// secret) it returns an ephemeral secret — acceptable only for ephemeral
+// deployments, as it changes on restart.
+func loadOrCreateSecret(stateDir string) (string, error) {
+	if stateDir == "" {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(b), nil
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return "", err
+	}
+	p := filepath.Join(stateDir, ".xray_secret")
+	if data, err := os.ReadFile(p); err == nil && len(strings.TrimSpace(string(data))) >= 16 {
+		return strings.TrimSpace(string(data)), nil
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	secret := hex.EncodeToString(b)
+	if err := os.WriteFile(p, []byte(secret), 0o600); err != nil {
+		return "", err
+	}
+	return secret, nil
 }
 
 type DNSConfig struct {
@@ -579,7 +725,16 @@ func LoadConfig(path string, isFile bool) error {
 	viper.SetDefault("xray.security", "reality_xtls")
 	viper.SetDefault("xray.timeout", "30s")
 	viper.SetDefault("xray.utls_fingerprint", "chrome")
+	viper.SetDefault("xray.reality.dest", "www.cloudflare.com:443")
+	viper.SetDefault("xray.reality.server_names", []string{
+		"www.cloudflare.com",
+		"www.microsoft.com",
+		"cloudflare.com",
+		"microsoft.com",
+	})
+	viper.SetDefault("xray.reality.spider_x", "/")
 	viper.SetDefault("xray.stealth.enforce", true)
+	viper.SetDefault("xray.stealth.enforce_control", false)
 	viper.SetDefault("xray.stealth.probe_interval", "30s")
 	viper.SetDefault("xray.stealth.probe_timeout", "5s")
 
@@ -1336,7 +1491,7 @@ func LoadServerConfig() (*Config, error) {
 		}
 	}
 
-	return &Config{
+	scfg := &Config{
 		ServerURL:          serverURL,
 		Addr:               viper.GetString("listen_addr"),
 		MetricsAddr:        viper.GetString("metrics_listen_addr"),
@@ -1436,10 +1591,12 @@ func LoadServerConfig() (*Config, error) {
 				PrivateKey:  viper.GetString("xray.reality.private_key"),
 				PublicKey:   viper.GetString("xray.reality.public_key"),
 				ShortID:     viper.GetString("xray.reality.short_id"),
+				ShortIDs:    viper.GetStringSlice("xray.reality.short_ids"),
 				SpiderX:     viper.GetString("xray.reality.spider_x"),
 			},
 			Stealth: StealthConfig{
 				Enforce:       viper.GetBool("xray.stealth.enforce"),
+				EnforceControl: viper.GetBool("xray.stealth.enforce_control"),
 				ProbeInterval: viper.GetDuration("xray.stealth.probe_interval"),
 				ProbeTimeout:  viper.GetDuration("xray.stealth.probe_timeout"),
 			},
@@ -1472,7 +1629,49 @@ func LoadServerConfig() (*Config, error) {
 			NodeStoreBatchSize:      viper.GetInt("tuning.node_store_batch_size"),
 			NodeStoreBatchTimeout:   viper.GetDuration("tuning.node_store_batch_timeout"),
 		},
-	}, nil
+	}
+
+	// Initialise the per-server stealth secret and derive the Reality keypair /
+	// short id. The secret is persisted next to the database so VLESS endpoint
+	// UUIDs/ports stay stable across restarts while remaining uncomputable by
+	// an outsider without the secret.
+	scfg.XRay.Secret = viper.GetString("xray.secret")
+	stateDir := ""
+	if scfg.Database.Type == "sqlite3" && scfg.Database.Sqlite.Path != "" {
+		stateDir = filepath.Dir(scfg.Database.Sqlite.Path)
+	}
+	if err := scfg.XRay.InitIdentity(stateDir); err != nil {
+		return nil, fmt.Errorf("initialising xray identity: %w", err)
+	}
+
+	return scfg, nil
+}
+
+// ResolveXRayIdentity returns the per-server secret and derived Reality
+// parameters exactly as the running server computes them, using the current
+// viper configuration. The CLI uses it to generate VLESS URIs whose endpoint
+// UUID/port match the server's listeners. It mirrors LoadServerConfig's
+// identity initialisation (including the persisted secret at the database
+// directory) so the two stay consistent.
+func ResolveXRayIdentity() (secret, publicKey, shortID, dest string) {
+	secret = viper.GetString("xray.secret")
+	stateDir := ""
+	if dbPath := viper.GetString("database.sqlite.path"); dbPath != "" {
+		stateDir = filepath.Dir(dbPath)
+	}
+	x := XRayConfig{
+		Reality: RealityConfig{
+			Dest:        viper.GetString("xray.reality.dest"),
+			ServerNames: viper.GetStringSlice("xray.reality.server_names"),
+			PrivateKey:  viper.GetString("xray.reality.private_key"),
+			PublicKey:   viper.GetString("xray.reality.public_key"),
+			ShortID:     viper.GetString("xray.reality.short_id"),
+			ShortIDs:    viper.GetStringSlice("xray.reality.short_ids"),
+			SpiderX:     viper.GetString("xray.reality.spider_x"),
+		},
+	}
+	_ = x.InitIdentity(stateDir)
+	return x.Secret, x.Reality.PublicKey, x.Reality.ShortID, x.Reality.Dest
 }
 
 // BaseDomain cannot be a suffix of the server URL.

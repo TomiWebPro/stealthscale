@@ -101,7 +101,7 @@ func Handler(cfg *types.Config, st State) http.Handler {
 	apiNodes := func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			handleNodes(w, r, st)
+			handleNodes(w, r, cfg, st)
 		case http.MethodDelete:
 			handleDeleteNode(w, r, st)
 		default:
@@ -182,7 +182,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func handleNodes(w http.ResponseWriter, r *http.Request, st State) {
+func handleNodes(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State) {
 	nodes := st.ListNodes()
 	out := make([]map[string]any, 0, nodes.Len())
 	for _, n := range nodes.All() {
@@ -210,8 +210,8 @@ func handleNodes(w http.ResponseWriter, r *http.Request, st State) {
 			"tags":      n.Tags().AsSlice(),
 			"expiry":    expiry,
 			"vless": map[string]any{
-				"uuid": xray.NodeUUID(n.ID()),
-				"port": xray.NodePort(n.ID(), 10001, 10100),
+				"uuid": xray.NodeUUID(n.ID(), cfg.XRay.Secret),
+				"port": xray.NodePort(n.ID(), cfg.XRay.Secret, 10001, 10100),
 			},
 		})
 	}
@@ -342,12 +342,16 @@ func handleVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config) {
 		sec = "reality_xtls"
 	}
 	vlessCfg := &xray.VLESSConfig{
-		ID:       xray.NodeUUID(nodeID),
-		Network:  "tcp",
-		Address:  cfg.XRay.ListenAddr,
-		Port:     xray.NodePort(nodeID, cfg.XRay.BaseListenPort, cfg.XRay.MaxListenPort),
-		Security: sec,
-		Timeout:  cfg.XRay.Timeout,
+		ID:        xray.NodeUUID(nodeID, cfg.XRay.Secret),
+		Network:   "tcp",
+		Address:   cfg.XRay.ListenAddr,
+		Port:      xray.NodePort(nodeID, cfg.XRay.Secret, cfg.XRay.BaseListenPort, cfg.XRay.MaxListenPort),
+		Security:  sec,
+		Timeout:   cfg.XRay.Timeout,
+		Dest:      cfg.XRay.Reality.Dest,
+		FP:        cfg.XRay.UTLSFingerprint,
+		PublicKey: cfg.XRay.Reality.PublicKey,
+		ShortID:   cfg.XRay.Reality.ShortID,
 	}
 	writeJSON(w, map[string]any{
 		"nodeID":  nodeID.String(),

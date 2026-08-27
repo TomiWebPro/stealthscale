@@ -665,7 +665,7 @@ func (a *AuthProviderOIDC) createOrUpdateUserFromClaim(
 // rendered the interstitial. It includes a per-session prefix derived
 // from the auth ID so cookies for unrelated registrations on the same
 // browser do not collide.
-const registerConfirmCSRFCookie = "stealthscale_register_confirm"
+const registerConfirmCSRFCookie = "register_confirm"
 
 // setRegisterConfirmCookie writes the per-session register-confirm CSRF
 // cookie. Pass the CSRF token and authCacheExpiration seconds to set it;
@@ -900,14 +900,14 @@ func renderRegistrationSuccessTemplate(
 	newNode bool,
 ) *bytes.Buffer {
 	result := templates.AuthSuccessResult{
-		Title:   "StealthScale - Node Reauthenticated",
+		Title:   "Node Reauthenticated",
 		Heading: "Node reauthenticated",
 		Verb:    "Reauthenticated",
 		User:    user.Display(),
 		Message: "You can now close this window.",
 	}
 	if newNode {
-		result.Title = "StealthScale - Node Registered"
+		result.Title = "Node Registered"
 		result.Heading = "Node registered"
 		result.Verb = "Registered"
 	}
@@ -919,7 +919,7 @@ func renderAuthSuccessTemplate(
 	user *types.User,
 ) *bytes.Buffer {
 	result := templates.AuthSuccessResult{
-		Title:   "StealthScale - SSH Session Authorized",
+		Title:   "SSH Session Authorized",
 		Heading: "SSH session authorized",
 		Verb:    "Authorized",
 		User:    user.Display(),

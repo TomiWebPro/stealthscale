@@ -1,17 +1,18 @@
 # StealthScale
 
 > A self-hosted, stealthy Tailscale-compatible **mesh** — one binary that is
-> both the client and the coordinator — using **VLESS + Reality (XTLS) + uTLS**
-> so all traffic is indistinguishable from ordinary TLS.
+> both the client and the coordinator — using **VLESS + uTLS-shaped TLS with a
+> decoy certificate (Reality-style)** so all traffic is indistinguishable from
+> ordinary TLS.
 
 StealthScale is a fork of [Headscale](https://github.com/juanfont/headscale)
 with a different end goal: **there is no "head" server and no special client.**
 Every device runs the same binary, becomes a *node* in the network, and
 coordinates with its peers. An always-on coordinate server is encouraged for
 reliability, but **any node can become a coordinate server by default** — there
-is no privileged role. The wire protocol is replaced with VLESS + Reality +
-uTLS so node-to-node and node-to-coordinator traffic is not recognisable as
-Tailscale/Headscale.
+is no privileged role. The wire protocol is replaced with VLESS + uTLS-shaped
+TLS presenting a decoy certificate (Reality-style) so node-to-node and
+node-to-coordinator traffic is not recognisable as Tailscale/Headscale.
 
 See [docs/stealthscale/overview.md](docs/stealthscale/overview.md) for the
 project goals and current status.
@@ -128,9 +129,11 @@ stscale nodes vless <node-id>
 
 > **Discovery vs stealth:** finding a coordinator for the first time may use
 > whatever is necessary (including non-stealth discovery). But once two peers
-> have identified each other, **all further transport is VLESS stealth** — there
-> is no plaintext control path. Real XTLS-Reality + uTLS only; no simulated
-> stealth.
+> have identified each other, **all further transport is VLESS stealth** — the
+> control path runs inside the stealth stream rather than as a plaintext port.
+> Stealth uses **uTLS-shaped TLS with a decoy certificate**; the client validates
+> the server via its Reality public key (not the certificate). Full XTLS-Reality
+> replay of a real destination's certificate is a planned enhancement.
 
 ### Web UI — the control plane
 
@@ -177,5 +180,13 @@ protocol with a raw VLESS client.
 
 ## License
 
-BSD-3-Clause. See [LICENSE](LICENSE). This is a modified version of
-Headscale; it is not endorsed by the original Headscale maintainers.
+BSD-3-Clause for StealthScale-originated code. See [LICENSE](LICENSE).
+
+This project bundles third-party components under their own licences
+(see `LICENSE` → *Third-Party Licenses*):
+
+- `github.com/xtls/reality` — MPL-2.0 (Copyright (c) 2023 RPRX) — XTLS-Reality server.
+- `github.com/XTLS/Xray-core` (reality transport) — MPL-2.0 — reference for the lightweight Reality client port (`hscontrol/xray/reality_client.go`).
+- `github.com/refraction-networking/utls` — BSD-3-Clause — uTLS fingerprinting.
+
+StealthScale is a modified version of Headscale; it is not endorsed by the original Headscale maintainers.
