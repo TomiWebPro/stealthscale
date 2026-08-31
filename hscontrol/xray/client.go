@@ -195,15 +195,6 @@ func DialVLESS(ctx context.Context, cfg *VLESSConfig) (net.Conn, error) {
 		conn.Close()
 		return nil, err
 	}
-	// For Reality, skip the VLESS ack check — the Reality handshake's
-	// session ticket handling leaves a handshake record that the client's
-	// next Read would see as "unexpected message" before the ack. The
-	// server still writes the ack and correctly handles the VLESS payload;
-	// skipping the ack lets the test proceed and the handler will still
-	// receive the payload.
-	if sec == "reality_xtls" {
-		return conn, nil
-	}
 	// Await server ack (single version byte).
 	if cfg.Timeout > 0 {
 		_ = conn.SetReadDeadline(time.Now().Add(cfg.Timeout))

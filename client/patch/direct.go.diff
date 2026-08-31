@@ -1,0 +1,35 @@
+--- a/control/controlclient/direct.go
++++ b/control/controlclient/direct.go
+@@ -30,6 +30,7 @@ import (
+     "tailscale.com/tailcfg"
+     "tailscale.com/types/key"
+     "tailscale.com/util/eventbus"
++    "github.com/tomiwebpro/stealthscale/hscontrol/xray"
+ )
+ 
+ // Direct is the classic control client that dials /ts2021 via controlhttp.
+@@ -120,7 +121,18 @@ func (c *Direct) tryLogin(ctx context.Context) error {
+-    // Original: dial controlhttp to /ts2021
+-    conn, err := c.dialControl(ctx)
++    // StealthScale: if VLESS URI is set, dial via VLESS+Reality (xtls/reality+utls)
++    // instead of raw controlhttp. VLESS URI is from --vless-uri flag or TS_VLESS_URI env,
++    // printed by `stscale nodes vless <id>` on the coordinator.
++    var conn net.Conn
++    if vlessURI := os.Getenv("TS_VLESS_URI"); vlessURI != "" {
++        cfg, err := xray.ParseVLESSURI(vlessURI)
++        if err != nil {
++            return fmt.Errorf("parsing TS_VLESS_URI: %w", err)
++        }
++        conn, err = xray.DialVLESS(ctx, cfg)
++        if err != nil {
++            return fmt.Errorf("VLESS dial (reality_xtls): %w", err)
++        }
++    } else {
++        conn, err = c.dialControl(ctx)
++    }
+     if err != nil {
+         return err
+     }
+ 
+     // controlbase handshake is unchanged — now tunneled inside VLESS when VLESS is used
+     noiseConn, err := controlbase.Client(ctx, conn, c.machineKey, c.controlKey, uint16(c.capVer))

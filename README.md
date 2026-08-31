@@ -1,17 +1,17 @@
 # StealthScale
 
 > A self-hosted, stealthy Tailscale-compatible **mesh** — one binary that is
-> both the client and the coordinator — using **VLESS + uTLS-shaped TLS with a
-> decoy certificate (Reality-style)** so all traffic is indistinguishable from
-> ordinary TLS.
+> both the client and the coordinator — using **VLESS + Reality (xtls/reality)
+> + uTLS** so all traffic is indistinguishable from ordinary TLS to a
+> network observer (the server steals the decoy site's real handshake).
 
 StealthScale is a fork of [Headscale](https://github.com/juanfont/headscale)
 with a different end goal: **there is no "head" server and no special client.**
 Every device runs the same binary, becomes a *node* in the network, and
 coordinates with its peers. An always-on coordinate server is encouraged for
 reliability, but **any node can become a coordinate server by default** — there
-is no privileged role. The wire protocol is replaced with VLESS + uTLS-shaped
-TLS presenting a decoy certificate (Reality-style) so node-to-node and
+is no privileged role. The wire protocol is replaced with VLESS + Reality
+(`github.com/xtls/reality`, MPL-2.0) + uTLS so node-to-node and
 node-to-coordinator traffic is not recognisable as Tailscale/Headscale.
 
 See [docs/stealthscale/overview.md](docs/stealthscale/overview.md) for the
@@ -177,6 +177,16 @@ make test         # go test ./...
 Server-level tests live in `hscontrol/servertest/` and include an end-to-end
 VLESS test (`hscontrol/servertest/xray_vless_test.go`) that drives the
 protocol with a raw VLESS client.
+
+## Documentation
+
+- [StealthScale overview](docs/stealthscale/overview.md)
+- [Install & deploy](docs/stealthscale/install.md) — including
+  [Upgrading from Headscale](docs/stealthscale/install.md#upgrading-from-headscale--old-stealthscale)
+- [Threat model](docs/ref/threat-model.md) — what Reality hides, what `enforce_control:false` still exposes, `ShortId`/`ServerNames` enumeration, `xray.secret` handling
+- [XRay/VLESS reference](docs/ref/xray-vless.md)
+- [Client modification guide](docs/client-modification.md)
+- [Web UI usage](docs/usage/webui.md) — hardening (`enforce_control:true` → `401` without API key)
 
 ## License
 

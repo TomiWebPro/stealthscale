@@ -359,8 +359,10 @@ func deriveX25519Public(scalar []byte) ([]byte, error) {
 
 // loadOrCreateSecret returns the persisted secret for stateDir, creating one
 // if absent. When stateDir is empty (e.g. postgres without a configured
-// secret) it returns an ephemeral secret — acceptable only for ephemeral
-// deployments, as it changes on restart.
+// secret or a test with no sqlite path) it returns an ephemeral secret —
+// acceptable only for ephemeral deployments/tests, as it changes on
+// restart. Production postgres deployments must set xray.secret explicitly
+// (enforced in validateServerConfig) so the identity is stable.
 func loadOrCreateSecret(stateDir string) (string, error) {
 	if stateDir == "" {
 		b := make([]byte, 32)
@@ -734,7 +736,7 @@ func LoadConfig(path string, isFile bool) error {
 	})
 	viper.SetDefault("xray.reality.spider_x", "/")
 	viper.SetDefault("xray.stealth.enforce", true)
-	viper.SetDefault("xray.stealth.enforce_control", false)
+	viper.SetDefault("xray.stealth.enforce_control", true)
 	viper.SetDefault("xray.stealth.probe_interval", "30s")
 	viper.SetDefault("xray.stealth.probe_timeout", "5s")
 
@@ -896,6 +898,12 @@ func validateServerConfig() error {
 		// reality_xtls does NOT require cert_file/key_file — it uses Reality dest dial
 		if security == "reality_xtls" {
 			// Optional dest validation, but allow empty (auto-derived from server_url)
+		}
+		// For postgres there is no local state dir to persist .xray_secret, so
+		// xray.secret must be set explicitly or the identity will change on
+		// every restart (breaking NodeUUID/NodePort/Reality keys).
+		if viper.GetString("database.type") == "postgres" && viper.GetString("xray.secret") == "" {
+			errorText += "Fatal config error: xray.secret is required when database.type is postgres (no local .xray_secret file); generate with 'openssl rand -hex 32' and set xray.secret\n"
 		}
 	}
 
@@ -1656,10 +1664,21 @@ func LoadServerConfig() (*Config, error) {
 func ResolveXRayIdentity() (secret, publicKey, shortID, dest string) {
 	secret = viper.GetString("xray.secret")
 	stateDir := ""
-	if dbPath := viper.GetString("database.sqlite.path"); dbPath != "" {
-		stateDir = filepath.Dir(dbPath)
+	// Mirror LoadServerConfig: only use sqlite path when database.type is sqlite.
+	dbType := viper.GetString("database.type")
+	if dbType == "" {
+		dbType = "sqlite3"
+	}
+	if dbType == "sqlite" {
+		dbType = "sqlite3"
+	}
+	if dbType == "sqlite3" {
+		if dbPath := viper.GetString("database.sqlite.path"); dbPath != "" {
+			stateDir = filepath.Dir(dbPath)
+		}
 	}
 	x := XRayConfig{
+		Secret: secret,
 		Reality: RealityConfig{
 			Dest:        viper.GetString("xray.reality.dest"),
 			ServerNames: viper.GetStringSlice("xray.reality.server_names"),

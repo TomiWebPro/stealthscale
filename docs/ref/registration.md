@@ -1,7 +1,11 @@
-# Registration methods
+# Registration methods (StealthScale)
+
+!!! warning "Stealth transport is mandatory by default — stock `tailscale up` alone will not connect"
+
+    StealthScale defaults to `xray.enabled:true`, `xray.security:reality_xtls`, `xray.stealth.enforce:true`, `xray.stealth.enforce_control:true`. The plaintext `/ts2021` Noise endpoint is **not served** — only **VLESS+Reality** per-node listeners (`10001`–`10100` by default). A stock Tailscale client that dials `tailscale up --login-server <URL>` without `--vless-uri` will fail with `404` or timeout. Use the **unified `stscale` binary** (`stscale up --coordinator <URL> --authkey <key> --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls&pbk=...&sid=...&dest=...&fp=chrome'` — fetch with `stscale nodes vless <id>`) or a patched Tailscale that imports `hscontrol/xray` (`DialVLESS` + `RealityUClient`). See [StealthScale clients](../stealthscale/clients.md), [XRay/VLESS reference](./xray-vless.md), and [Threat model](./threat-model.md). If you need stock-client compat, set `xray.stealth.enforce_control:false` (then fingerprintable).
 
 StealthScale supports multiple ways to register a node. The preferred registration method depends on the identity of a node
-and your use case.
+and your use case. The identity model is inherited from Headscale/Tailscale.
 
 ## Identity model
 
@@ -40,105 +44,90 @@ user\[^1\]:
 stscale users create <USER>
 ```
 
-=== "Personal devices"
-
-    Run `tailscale up` to login your personal device:
+=== "Personal devices — unified `stscale` (recommended, VLESS+Reality)"
 
     ```console
-    tailscale up --login-server <YOUR_STSCALE_URL>
+    # on coordinator: create user and pre-auth key
+    stscale users create alice
+    stscale preauthkeys create --user <USER_ID> --reusable
+    # fetch this node's VLESS URI (port/pbk/sid derived from xray.secret)
+    stscale nodes vless <NODE_ID>
+    # on the new device (same stscale binary):
+    stscale up --coordinator <YOUR_STSCALE_URL> --authkey <YOUR_AUTH_KEY> \
+      --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls&pbk=<pubkey>&sid=<sid>&dest=www.cloudflare.com%3A443&fp=chrome'
     ```
 
-    Usually, a browser window with further instructions is opened. This page explains how to complete the registration
-    on your StealthScale server and it also prints the Auth ID required to approve the node:
+    For stock `tailscale up` you must patch the client to dial VLESS (see [Client modification](../client-modification.md)); otherwise the coordinator's `/ts2021` is not mounted (`enforce_control:true`). A browser window flow may still open if you set `enforce_control:false` (not stealth):
 
     ```console
+    tailscale up --login-server <YOUR_STSCALE_URL>  # only when enforce_control:false
     stscale auth register --user <USER> --auth-id <AUTH_ID>
     ```
 
-    Congrations, the registration of your personal node is complete and it should be listed as "online" in the output of
-    `stscale nodes list`. The "User" column displays `<USER>` as the owner of the node.
+=== "Tagged devices — unified `stscale`"
 
-=== "Tagged devices"
-
-    Your StealthScale user needs to be authorized to register tagged devices. This authorization is specified in the
-    [`tagOwners`](https://tailscale.com/docs/reference/syntax/policy-file#tag-owners) section of the
-    [policy](policy.md). A simple example looks like this:
+    Your StealthScale user must be authorized for the tag in [`tagOwners`](https://tailscale.com/docs/reference/syntax/policy-file#tag-owners):
 
     ```json title="The user alice can register nodes tagged with tag:server"
     {
-      "tagOwners": {
-        "tag:server": ["alice@"]
-      },
-      // more rules
+      "tagOwners": { "tag:server": ["alice@"] }
     }
     ```
 
-    Run `tailscale up` and provide at least one tag to login a tagged device:
-
     ```console
-    tailscale up --login-server <YOUR_STSCALE_URL> --advertise-tags tag:<TAG>
+    stscale users create alice  # once
+    stscale preauthkeys create --tags tag:server  # tags come from the key
+    stscale nodes vless <NODE_ID>
+    stscale up --coordinator <YOUR_STSCALE_URL> --authkey <YOUR_AUTH_KEY> \
+      --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls&pbk=...&sid=...&dest=...'
     ```
 
-    Usually, a browser window with further instructions is opened. This page explains how to complete the registration
-    on your StealthScale server and it also prints the Auth ID required to approve the node:
+    Equivalent stock-client (only when `enforce_control:false`):
 
     ```console
+    tailscale up --login-server <YOUR_STSCALE_URL> --advertise-tags tag:server
     stscale auth register --user <USER> --auth-id <AUTH_ID>
     ```
 
-    StealthScale checks that `<USER>` is allowed to register a node with the specified tag(s) and then transfers ownership
-    of the new node to the special user `tagged-devices`. The registration of a tagged node is complete and it should be
-    listed as "online" in the output of `stscale nodes list`. The "User" column displays `tagged-devices` as the owner
-    of the node. See the "Tags" column for the list of assigned tags.
+    Ownership transfers to `tagged-devices`; check `stscale nodes list`.
 
-### Pre authenticated key
+### Pre-authenticated key
 
-Registration with a pre authenticated key (or auth key) is a non-interactive way to register a new node. The StealthScale
-administrator creates a preauthkey upfront and this preauthkey can then be used to register a node non-interactively.
-Its best suited for automation.
+Registration with a pre-authenticated key is non-interactive and best for automation. With stealth, the key is still required but the transport is VLESS.
 
-=== "Personal devices"
-
-    A personal node is always assigned to a StealthScale user. Use the `stscale users` command to create a new user\[^1\]:
+=== "Personal devices — VLESS"
 
     ```console
     stscale users create <USER>
-    ```
-
-    Use the `stscale user list` command to learn its `<USER_ID>` and create a new pre authenticated key for your user:
-
-    ```console
     stscale preauthkeys create --user <USER_ID>
+    # -> <YOUR_AUTH_KEY> (default 1h, single use; add --reusable --expiration 24h as needed)
+    stscale nodes vless <ID>  # get URI for this node
+    stscale up --coordinator <YOUR_STSCALE_URL> --authkey <YOUR_AUTH_KEY> \
+      --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls&pbk=...&sid=...&dest=...&fp=chrome'
     ```
 
-    The above prints a pre authenticated key with the default settings (can be used once and is valid for one hour). Use
-    this auth key to register a node non-interactively:
+    Stock-client fallback (only when `enforce_control:false`):
 
     ```console
     tailscale up --login-server <YOUR_STSCALE_URL> --authkey <YOUR_AUTH_KEY>
     ```
 
-    Congrations, the registration of your personal node is complete and it should be listed as "online" in the output of
-    `stscale nodes list`. The "User" column displays `<USER>` as the owner of the node.
-
-=== "Tagged devices"
-
-    Create a new pre authenticated key and provide at least one tag:
+=== "Tagged devices — VLESS"
 
     ```console
     stscale preauthkeys create --tags tag:<TAG>
+    # -> <YOUR_AUTH_KEY> (tags baked into key)
+    stscale nodes vless <ID>
+    stscale up --coordinator <YOUR_STSCALE_URL> --authkey <YOUR_AUTH_KEY> \
+      --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls&pbk=...&sid=...&dest=...&fp=chrome'
     ```
 
-    The above prints a pre authenticated key with the default settings (can be used once and is valid for one hour). Use
-    this auth key to register a node non-interactively. You don't need to provide the `--advertise-tags` parameter as
-    the tags are automatically read from the pre authenticated key:
+    Stock fallback (only when `enforce_control:false`):
 
     ```console
     tailscale up --login-server <YOUR_STSCALE_URL> --authkey <YOUR_AUTH_KEY>
     ```
 
-    The registration of a tagged node is complete and it should be listed as "online" in the output of
-    `stscale nodes list`. The "User" column displays `tagged-devices` as the owner of the node. See the "Tags" column for the list of
-    assigned tags.
+    Listed as `tagged-devices` in `stscale nodes list`.
 
 \[^1\]: [Ensure that the StealthScale username does not end with `@`.](oidc.md#reference-a-user-in-the-policy)

@@ -20,10 +20,25 @@ import (
 	"time"
 
 	reality "github.com/xtls/reality"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	utls "github.com/refraction-networking/utls"
 	"github.com/rs/zerolog/log"
 
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
+)
+
+var (
+	realityHandshakeSuccess = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "stealthscale",
+		Name:      "reality_handshake_success_total",
+		Help:      "total count of successful Reality handshakes",
+	}, []string{"dest", "sni"})
+	realityHandshakeFailure = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "stealthscale",
+		Name:      "reality_handshake_failure_total",
+		Help:      "total count of failed Reality handshakes",
+	}, []string{"dest", "sni", "reason"})
 )
 
 // bufferedConn is a net.Conn whose reads go through a bufio.Reader, so
@@ -232,12 +247,13 @@ func buildRealityConfig(cfg *types.XRayConfig) (*reality.Config, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, network, address)
 		},
-		Type:        "tcp",
-		Dest:        dest,
-		ServerNames: serverNames,
-		PrivateKey:  privBytes,
-		ShortIds:    shortIds,
-		Show:        show,
+		Type:                   "tcp",
+		Dest:                   dest,
+		ServerNames:            serverNames,
+		PrivateKey:             privBytes,
+		ShortIds:               shortIds,
+		Show:                   show,
+		SessionTicketsDisabled: true,
 	}
 	return rc, nil
 }
@@ -431,12 +447,22 @@ func (s *Server) handleConn(ctx context.Context, nodeID types.NodeID, conn net.C
 	}
 	// Reality path uses xtls/reality which steals the dest handshake;
 	// plain tls/xtls path uses utls.
+	dest := ""
+	sni := ""
+	if s.cfg != nil {
+		dest = s.cfg.Reality.Dest
+		if len(s.cfg.Reality.ServerNames) > 0 {
+			sni = s.cfg.Reality.ServerNames[0]
+		}
+	}
 	if s.realityConfig != nil && security == "reality_xtls" {
 		rConn, err := reality.Server(ctx, conn, s.realityConfig)
 		if err != nil {
+			realityHandshakeFailure.WithLabelValues(dest, sni, "reality_server").Inc()
 			log.Error().Err(err).Uint64("node_id", uint64(nodeID)).Msg("xray: Reality handshake failed")
 			return
 		}
+		realityHandshakeSuccess.WithLabelValues(dest, sni).Inc()
 		conn = rConn
 	} else if s.tlsConfig != nil {
 		if security == "reality_xtls" {

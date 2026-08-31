@@ -20,13 +20,14 @@ import (
 )
 
 // TestServer is an in-process StealthScale control server suitable for
-// use with Tailscale's [controlclient.Direct].
+// use with Tailscale's [controlclient.Direct] instances.
 //
 // Networking uses tailscale.com/net/memnet so that all TCP
 // connections stay in-process — no real sockets are opened.
 type TestServer struct {
 	App *hscontrol.StealthScale
 	URL string
+	Cfg *types.Config
 
 	memNet     *memnet.Network
 	ln         net.Listener
@@ -48,6 +49,8 @@ type serverConfig struct {
 	xrayAddr         string
 	xrayPortStart    int
 	xrayPortEnd      int
+	xrayReality      bool
+	xrayRealityDest  string
 }
 
 func defaultServerConfig() *serverConfig {
@@ -116,6 +119,21 @@ func WithXRay(addr string, portStart, portEnd int) ServerOption {
 	}
 }
 
+// WithXRayReality enables the VLESS+Reality transport with a local dest for
+// testing (e.g. 127.0.0.1:xxxxx from startLocalRealityDest). It configures
+// security=reality_xtls and the dual-decoy ServerNames. The dest is the
+// decoy destination that Reality steals (local self-signed for CI). If dest
+// is empty, the server defaults to www.cloudflare.com:443.
+func WithXRayReality(addr string, portStart, portEnd int, dest string) ServerOption {
+	return func(c *serverConfig) {
+		c.xrayAddr = addr
+		c.xrayPortStart = portStart
+		c.xrayPortEnd = portEnd
+		c.xrayRealityDest = dest
+		c.xrayReality = true
+	}
+}
+
 // NewServer creates and starts a StealthScale test server.
 // The server is fully functional and accepts real Tailscale control
 // protocol connections over Noise.
@@ -169,6 +187,20 @@ func NewServer(tb testing.TB, opts ...ServerOption) *TestServer {
 			BaseListenPort: sc.xrayPortStart,
 			MaxListenPort:  sc.xrayPortEnd,
 			Timeout:        30 * time.Second,
+		}
+		if sc.xrayReality {
+			cfg.XRay.Security = "reality_xtls"
+			cfg.XRay.UTLSFingerprint = "chrome"
+			cfg.XRay.Reality.Dest = sc.xrayRealityDest
+			if cfg.XRay.Reality.Dest == "" {
+				cfg.XRay.Reality.Dest = "www.cloudflare.com:443"
+			}
+			cfg.XRay.Reality.ServerNames = []string{"www.cloudflare.com", "www.microsoft.com", "cloudflare.com", "microsoft.com", "127.0.0.1"}
+			cfg.XRay.Stealth.Enforce = true
+			cfg.XRay.Stealth.EnforceControl = true
+			if err := cfg.XRay.InitIdentity(tmpDir); err != nil {
+				tb.Fatalf("servertest: InitIdentity: %v", err)
+			}
 		}
 	}
 
@@ -231,6 +263,7 @@ func NewServer(tb testing.TB, opts ...ServerOption) *TestServer {
 	ts := &TestServer{
 		App:        app,
 		URL:        serverURL,
+		Cfg:        &cfg,
 		memNet:     &memNetwork,
 		ln:         ln,
 		httpServer: httpServer,

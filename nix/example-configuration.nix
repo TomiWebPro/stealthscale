@@ -118,6 +118,32 @@
         path = "/var/lib/coordination/policy.hujson";
       };
 
+      # Stealth transport (VLESS + Reality + uTLS) — defaults are production-ready
+      # The per-server secret is auto-persisted to .xray_secret for sqlite;
+      # for postgres you MUST set settings.xray.secret (openssl rand -hex 32)
+      # or the server will fail to start and vless:// URIs will be unstable.
+      xray = {
+        enabled = true;
+        security = "reality_xtls";
+        # secret = "your-64-hex-secret-for-postgres";
+        listen_addr = "0.0.0.0";
+        listen_port = 10001;
+        max_listen_port = 10100;
+        utls_fingerprint = "chrome";
+        reality = {
+          dest = "www.cloudflare.com:443";
+          server_names = [ "www.cloudflare.com" "www.microsoft.com" "cloudflare.com" "microsoft.com" ];
+          # short_ids = [ "your-short-id" ]; # auto from secret if empty
+          spider_x = "/";
+        };
+        stealth = {
+          enforce = true;
+          enforce_control = true; # hide /ts2021, gate WebUI behind API key
+          probe_interval = "30s";
+          probe_timeout = "5s";
+        };
+      };
+
       # You can add ANY stealthscale configuration option here thanks to freeform settings
       # For example, experimental features or settings not explicitly defined above:
       # experimental_feature = true;

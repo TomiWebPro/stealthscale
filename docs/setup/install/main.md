@@ -1,28 +1,19 @@
-# Development builds
+# Development builds (StealthScale)
 
 !!! warning
 
-    Development builds are created automatically from the latest `main` branch
-    and are **not versioned releases**. They may contain incomplete features,
-    breaking changes, or bugs. Use them for testing only.
+    Development builds are from `main` and are **not versioned releases**. They track `xray.security:reality_xtls` via `github.com/xtls/reality` + `utls` and `xray.stealth.enforce:true` (fail-closed DERP). May contain breaking changes — test only. The authoritative setup is [StealthScale Install & deploy](../../stealthscale/install.md).
 
-Each push to `main` produces container images and cross-compiled binaries.
-Container images are multi-arch (amd64, arm64) and use the same distroless
-base image as official releases.
+Each push to `main` produces container images and cross-compiled binaries (`stscale` unified binary: `stscale serve` and `stscale up` same binary, `CGO_ENABLED=0`).
 
-## Container images
+## Container images (multi-arch amd64/arm64, distroless)
 
-Images are available from both Docker Hub and GitHub Container Registry, tagged
-with the short commit hash of the build (e.g. `main-abc1234`):
+Tagged with short commit hash (`main-<sha>`):
 
-- Docker Hub: `docker.io/stealthscale/stealthscale:main-<sha>`
-- GitHub Container Registry: `ghcr.io/tomiwebpro/stealthscale:main-<sha>`
+- `ghcr.io/tomiwebpro/stealthscale:main-<sha>` (canonical)
+- `docker.io/stealthscale/stealthscale:main-<sha>` (legacy)
 
-To find the latest available tag, check the
-[GitHub Actions workflow](https://github.com/tomiwebpro/stealthscale/actions/workflows/container-main.yml)
-or the [GitHub Container Registry package page](https://github.com/tomiwebpro/stealthscale/pkgs/container/stscale).
-
-For example, to run a specific development build:
+Latest tag: [GitHub Actions workflow](https://github.com/tomiwebpro/stealthscale/actions/workflows/container-main.yml) or [GHCR package page](https://github.com/tomiwebpro/stealthscale/pkgs/container/stscale).
 
 ```shell
 docker run \
@@ -34,25 +25,31 @@ docker run \
   --volume "$(pwd)/lib:/var/lib/stealthscale" \
   --publish 127.0.0.1:8080:8080 \
   --publish 127.0.0.1:9090:9090 \
-  --health-cmd "CMD stscale health" \
-  docker.io/stealthscale/stealthscale:main-<sha> \
+  --publish 10001-10100:10001-10100 \
+  --publish 3478:3478/udp \
+  ghcr.io/tomiwebpro/stealthscale:main-<sha> \
   serve
 ```
 
-See [Running stscale in a container](container.md) for full container setup instructions.
+Expose the VLESS range (`10001`–`10100`) and STUN if DERP enabled. Without it, `stscale nodes vless <id>` URIs are unreachable. For `postgres`, set `xray.secret` (`openssl rand -hex 32`) explicitly.
 
-## Binaries
+## Binaries (via nightly.link)
 
-Pre-built binaries from the latest successful build on `main` are available
-via [nightly.link](https://nightly.link/tomiwebpro/stealthscale/workflows/container-main/main):
-
-| OS    | Arch  | Download                                                                                                                    |
-| ----- | ----- | --------------------------------------------------------------------------------------------------------------------------- |
-| Linux | amd64 | [stscale-linux-amd64](https://nightly.link/tomiwebpro/stealthscale/workflows/container-main/main/stscale-linux-amd64.zip)   |
-| Linux | arm64 | [stscale-linux-arm64](https://nightly.link/tomiwebpro/stealthscale/workflows/container-main/main/stscale-linux-arm64.zip)   |
+| OS | Arch | Download |
+|---|---|---|
+| Linux | amd64 | [stscale-linux-amd64](https://nightly.link/tomiwebpro/stealthscale/workflows/container-main/main/stscale-linux-amd64.zip) |
+| Linux | arm64 | [stscale-linux-arm64](https://nightly.link/tomiwebpro/stealthscale/workflows/container-main/main/stscale-linux-arm64.zip) |
 | macOS | amd64 | [stscale-darwin-amd64](https://nightly.link/tomiwebpro/stealthscale/workflows/container-main/main/stscale-darwin-amd64.zip) |
 | macOS | arm64 | [stscale-darwin-arm64](https://nightly.link/tomiwebpro/stealthscale/workflows/container-main/main/stscale-darwin-arm64.zip) |
 
-After downloading and extracting the archive, make the binary executable and follow the
-[standalone binary installation](official.md#using-standalone-binaries-advanced)
-instructions for setting up the service.
+After download, verify VLESS identity:
+
+```shell
+./stscale --help
+./stscale configtest
+./stscale nodes vless 1  # should be stable when xray.secret / .xray_secret stable
+curl http://127.0.0.1:8080/web | head  # embedded WebUI
+curl http://127.0.0.1:8080/health
+```
+
+See [Container](container.md) for full container setup and [StealthScale clients](../../stealthscale/clients.md) for `stscale up --coordinator --vless-uri`.

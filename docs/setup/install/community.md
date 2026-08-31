@@ -1,38 +1,36 @@
-# Community packages
+# Community packages (StealthScale)
 
-Several Linux distributions and community members provide packages for stscale. Those packages may be used instead of
-the [official releases](official.md) provided by the stscale maintainers. Such packages offer improved integration
-for their targeted operating system and usually:
+Community packages may be used instead of [official releases](official.md) but keep StealthScale's stealth defaults: `xray.enabled:true`, `xray.security:reality_xtls` (via `github.com/xtls/reality` + `utls`), per-node VLESS listeners on `xray.listen_port` … `max_listen_port` (default `10001`–`10100`), and `xray.secret` / `.xray_secret` stability. The authoritative guide is [StealthScale Install & deploy](../../stealthscale/install.md). Community builds are not verified by the StealthScale authors and may be outdated — check `xray.*` and `stealth.*` in `/etc/stealthscale/config.yaml` after install.
 
-- setup a dedicated local user account to run stscale
-- provide a default configuration
-- install stscale as system service
+!!! warning "May be outdated — verify VLESS+Reality"
 
-!!! warning "Community packages might be outdated"
+    Run `stscale nodes vless 1` after install and confirm `security=reality_xtls` and that the VLESS port range is exposed. If `stscale` refuses to start on `postgres` with `xray.secret is required`, set `xray.secret` (`openssl rand -hex 32`). For WebUI, visit `/web` or `/admin` — it is embedded (not a separate package), see [Web UI](../../usage/webui.md) and [Integration Web UI](../../ref/integration/web-ui.md).
 
-    The packages mentioned on this page might be outdated or unmaintained. Use the [official releases](official.md) to
-    get the current stable version or to [test pre-releases](main.md).
-
-    [![Packaging status](https://repology.org/badge/vertical-allrepos/stscale.svg)](https://repology.org/project/stscale/versions)
+[![Packaging status](https://repology.org/badge/vertical-allrepos/stscale.svg)](https://repology.org/project/stscale/versions)
 
 ## Arch Linux
 
-Arch Linux offers a package for stscale, install via:
-
 ```shell
-pacman -S stscale
+pacman -S stscale  # or stealthscale if renamed by AUR — verify binary is `stscale`
+stscale --help
+# check VLESS
+stscale configtest && stscale nodes vless 1
 ```
 
-## Fedora, RHEL, CentOS
+## Fedora / RHEL / CentOS
 
-A third-party repository for various RPM based distributions is available at:
-<https://copr.fedorainfracloud.org/coprs/jonathanspw/stscale/>. The site provides detailed setup and installation
-instructions.
+COPR `jonathanspw/stscale`: <https://copr.fedorainfracloud.org/coprs/jonathanspw/stscale/> — follow its setup, then verify `xray.*` as above.
 
-## Nix, NixOS
+## Nix / NixOS
 
-A Nix package is available as: `stscale`. See the [NixOS package site for installation
-details](https://search.nixos.org/packages?show=stscale).
+`stscale` (check `nixpkgs` for `stealthscale` alias):
+
+```shell
+nix-shell -p stscale
+# or NixOS module: services.stealthscale.enable (adjust per actual nix expression)
+```
+
+`nix develop` in the StealthScale repo pins Go `1.26.1` via `flake.nix`.
 
 ## Gentoo
 
@@ -40,13 +38,10 @@ details](https://search.nixos.org/packages?show=stscale).
 emerge --ask net-vpn/stscale
 ```
 
-Gentoo specific documentation is available [here](https://wiki.gentoo.org/wiki/User:Maffblaster/Drafts/StealthScale).
+Per-port docs: <https://wiki.gentoo.org/wiki/User:Maffblaster/Drafts/StealthScale> — adapt for VLESS ports.
 
 ## OpenBSD
 
-StealthScale is available in ports. The port installs stscale as system service with `rc.d` and provides usage
-instructions upon installation.
+Ports: `pkg_add stscale` (service via `rc.d`). Follow [Build from source](source.md) if the port lags.
 
-```shell
-pkg_add stscale
-```
+After any community install, continue at [StealthScale clients](../../stealthscale/clients.md) (`stscale up --coordinator --vless-uri`) and backup `.xray_secret` per [Upgrade](../upgrade.md).

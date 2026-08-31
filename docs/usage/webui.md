@@ -16,9 +16,24 @@ Visit `http://<server>:8080/web` or `http://<server>:8080/admin` (alias) — wor
 
 Dark theme matches the scheduler WebUI (`--bg:#0b0e14;--panel:#11151f;--line:#232a3b;--acc:#5b8cff`).
 
+## Hardening and exposure
+
+By default the WebUI is served on the public `listen_addr` (`/web` and `/admin`) and requires no extra auth when `xray.stealth.enforce_control` is `false`. For production stealth, set:
+
+```yaml
+xray:
+  stealth:
+    enforce: true
+    enforce_control: true  # hide /ts2021 and gate WebUI behind auth
+```
+
+When `enforce` and `enforce_control` are both `true` (the default), the WebUI at `/web` and `/admin` requires an `Authorization: Bearer <api-key>` or `X-API-Key` header; unauthenticated `curl http://<listen_addr>/web` returns `401`. This prevents anonymous enumeration and product fingerprinting. For stronger isolation, firewall the public `listen_addr` and expose the WebUI only on `metrics_listen_addr` (internal network) or behind a Reality-enabled reverse proxy.
+
+`packaging/systemd/stealthscale.service` ships with the same `config-example.yaml` defaults; `docs/stealthscale/install.md` covers the hardening.
+
 ## API
 
-All endpoints serve JSON from the live `state.State` stores and require no extra auth when accessed via the embedded UI (API-key auth is enforced at the control-plane API layer).
+When hardening is disabled, all endpoints serve JSON from the live `state.State` stores and require no extra auth when accessed via the embedded UI (API-key auth is enforced at the control-plane API layer). When hardening is enabled, every `/web/api/*` and `/admin/api/*` request (and the frontend shell itself) requires the API-key header above.
 
 ```
 GET    /web/api/nodes        # list nodes

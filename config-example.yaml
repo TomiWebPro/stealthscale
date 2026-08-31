@@ -92,13 +92,15 @@ xray:
   # Enables the VLESS transport listeners (default: true, stealth mode).
   enabled: true
 
-  # Optional per-server secret. If empty (recommended), a secret is generated
-  # and persisted next to the database (e.g. /var/lib/stealthscale/.xray_secret)
-  # on first run. The secret keys the derivation of each node's VLESS UUID and
-  # port and the Reality keypair/short-id, so endpoints are stable across
-  # restarts and cannot be enumerated by an outsider who lacks the secret.
-  # Set this only if you run multiple coordinators that must share one identity,
-  # or use postgres (which has no local secret file).
+  # Per-server secret. For sqlite (default) it is auto-generated and
+  # persisted next to the database (e.g. /var/lib/stealthscale/.xray_secret)
+  # on first run if empty. The secret keys the derivation of each node's
+  # VLESS UUID and port and the Reality keypair/short-id, so endpoints are
+  # stable across restarts and cannot be enumerated by an outsider who lacks
+  # the secret.
+  # MUST be set explicitly when database.type is postgres (no local file to
+  # persist it) — generate with `openssl rand -hex 32`. Also set it if you
+  # run multiple coordinators that must share one identity.
   secret: ""
 
   # Address the per-node VLESS listeners bind to.
@@ -156,9 +158,16 @@ xray:
     enforce: true
     # When true, the legacy Tailscale Noise (/ts2021) registration endpoint is
     # removed from the public router so nodes can only register over the stealth
-    # VLESS transport. Off by default to stay compatible with stock clients;
-    # enable only with a stealth-capable (uTLS-based) client.
-    enforce_control: false
+    # VLESS transport. True by default for stealth — the control plane then
+    # looks like the decoy site (Cloudflare/Microsoft via Reality). Set to
+    # false only if you need compatibility with stock Tailscale clients that
+    # cannot dial VLESS+Reality; in that case the Noise endpoint remains
+    # fingerprintable.
+    # For full stealth, also ensure the main `listen_addr` is either wrapped
+    # with Reality (Dest=`xray.reality.dest`) or placed behind a
+    # Reality-enabled reverse proxy so the control-plane TLS presents the
+    # decoy certificate (see docs/ref/xray-vless.md).
+    enforce_control: true
     probe_interval: 30s
     probe_timeout: 5s
 

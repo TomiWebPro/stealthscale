@@ -1,14 +1,15 @@
-# Modifying a Tailscale client for VLESS
+# VLESS Protocol (Reference)
 
-This guide explains how to build a Tailscale client that talks to a
-StealthScale server. A stock `tailscaled` dials the control server with
-WireGuard (`wgengine`) and speaks the TS2021 noise protocol over a raw TCP
-connection. A StealthScale client replaces the transport with **VLESS**: it
-connects to the node's VLESS endpoint, authenticates with its UUID, then
-speaks exactly the same noise + HTTP/2 machine API.
+**There is no separate client.** `stscale` is the single unified binary:
+`stscale serve` (coordinator) and `stscale up` (node) both use
+`hscontrol/xray` `DialVLESS` + `RealityUClient` (`cmd/stealthscale/cli/up.go`).
+You do **not** need a patched `tailscale`.
 
-The control plane protocol is unchanged — only the transport changes — so
-the patch is small and localised to the dialing layer.
+This guide is **reference** — it explains the VLESS transport so you can
+understand `stscale up` or, if you prefer, patch `tailscale` yourself.
+A stock `tailscaled` dials with WireGuard; `stscale` replaces it with **VLESS
++ Reality + uTLS** to the node's `vless://` endpoint. The control plane
+protocol is unchanged — only the transport changes.
 
 ## Protocol contract
 
@@ -109,7 +110,9 @@ The URI is produced by the server:
 
 ```shell
 stscale nodes vless <node-id>
-# vless://9f4d4f6c-...@10.0.0.5:10042?security=none
+# vless://9f4d4f6c-...@10.0.0.5:10042?security=reality_xtls&fp=chrome&type=tcp&flow=xtls-rprx-vision&dest=www.cloudflare.com%3A443&pbk=<pubkey-hex>&sid=<shortId-hex>&spx=%2F
+# for reality_xtls: dest (decoy), pbk (Reality public key hex), sid (shortId hex), spx (SpiderX), fp (uTLS fingerprint: chrome/firefox/safari/ios/randomized → hscontrol/xray/client.go:247)
+# for none/tls/xtls: vless://<uuid>@<addr>:<port>?security=<mode>
 ```
 
 ## What must NOT change

@@ -82,12 +82,12 @@ plugins:
       redirect_maps:
         acls.md: ref/policy.md
         ref/acls.md: ref/policy.md
-        android-client.md: usage/connect/android.md
-        apple-client.md: usage/connect/apple.md
+        android-client.md: stealthscale/clients.md
+        apple-client.md: stealthscale/clients.md
         dns-records.md: ref/dns.md
         exit-node.md: ref/routes.md
         faq.md: about/faq.md
-        iOS-client.md: usage/connect/apple.md#ios
+        iOS-client.md: stealthscale/clients.md
         oidc.md: ref/oidc.md
         ref/exit-node.md: ref/routes.md
         ref/remote-cli.md: ref/api.md#remote-control
@@ -95,7 +95,11 @@ plugins:
         reverse-proxy.md: ref/integration/reverse-proxy.md
         tls.md: ref/tls.md
         web-ui.md: ref/integration/web-ui.md
-        windows-client.md: usage/connect/windows.md
+        windows-client.md: stealthscale/clients.md
+        usage/getting-started.md: stealthscale/install.md
+        usage/connect/android.md: stealthscale/clients.md
+        usage/connect/apple.md: stealthscale/clients.md
+        usage/connect/windows.md: stealthscale/clients.md
 
 # Customization
 extra:
@@ -182,12 +186,7 @@ nav:
           - Development builds: setup/install/main.md
       - Upgrade: setup/upgrade.md
   - Usage:
-      - Getting started: usage/getting-started.md
       - Web UI: usage/webui.md
-      - Connect a node:
-          - Android: usage/connect/android.md
-          - Apple: usage/connect/apple.md
-          - Windows: usage/connect/windows.md
   - Reference:
       - Configuration: ref/configuration.md
       - XRay/VLESS transport: ref/xray-vless.md

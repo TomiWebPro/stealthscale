@@ -128,8 +128,7 @@ func RealityUClient(conn net.Conn, cfg *RealityClientConfig, ctx context.Context
 		VerifyPeerCertificate:  uConn.VerifyPeerCertificate,
 		ServerName:             cfg.ServerName,
 		InsecureSkipVerify:     true,
-		SessionTicketsDisabled: false,
-		ClientSessionCache:     utls.NewLRUClientSessionCache(32),
+		SessionTicketsDisabled: true,
 	}
 	uConn.serverName = utlsCfg.ServerName
 	helloID := fpToClientHelloID(cfg.Fingerprint)

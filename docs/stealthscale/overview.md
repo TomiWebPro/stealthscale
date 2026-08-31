@@ -8,9 +8,10 @@ binary, becomes a *node* in the network, and coordinates with its peers. An
 always-on coordinate server is encouraged for reliability, but **any node can
 become a coordinate server by default** — there is no privileged role.
 
-The wire protocol is replaced with **VLESS + uTLS-shaped TLS presenting a decoy
-certificate (Reality-style)** so node-to-node and node-to-coordinator traffic is
-indistinguishable from ordinary TLS to a network observer.
+The wire protocol is replaced with **VLESS + Reality (xtls/reality) + uTLS**
+so node-to-node and node-to-coordinator traffic is indistinguishable from
+ordinary TLS to a network observer (the server steals the decoy site's real
+handshake via `github.com/xtls/reality`).
 
 ## Project goals (what "done" means)
 
@@ -56,15 +57,20 @@ like ordinary TLS to a network observer:
 - **VLESS** — the lightweight proxying protocol from the
   [Xray-core](https://github.com/XTLS/Xray-core) ecosystem. A VLESS session
   looks like a plain TLS connection to anything inspecting the stream.
-- **uTLS** — ClientHello fingerprinting. The TLS handshake is shaped to mimic a
-  real browser's ClientHello, defeating active fingerprinting.
+- **uTLS** — ClientHello fingerprinting (`chrome`, `firefox`, `safari`,
+  `randomized`, `ios` via `hscontrol/xray/client.go:247`). The TLS handshake is
+  shaped to mimic a real browser's ClientHello, defeating active fingerprinting.
+- **Reality (xtls/reality, MPL-2.0)** — the server steals the live TLS handshake
+  of the decoy dest (default `www.cloudflare.com:443`, with
+  `www.microsoft.com:443` as second decoy) via `github.com/xtls/reality`
+  (`hscontrol/xray/server.go:140` `buildRealityConfig` + `reality.Server`).
+  The client validates the server via its Reality public key
+  (`hscontrol/xray/reality_client.go:66` `VerifyPeerCertificate`), not the
+  certificate. The dest's 2044-byte EncryptedExtensions (Cloudflare) vs 32 for a
+  self-signed local dest is handled (`reality.DetectPostHandshakeRecordsLens`).
 - **Noise** — the standard Tailscale control protocol (TS2021) still runs, but
-  *inside* the VLESS stream instead of on the wire.
-- **Reality (uTLS + decoy cert)** — the TLS surface is provided by a uTLS-shaped
-  `crypto/tls` handshake that presents a decoy certificate for the configured
-  `reality.Dest` SNI, so the endpoint resembles a legitimate TLS site. Full
-  XTLS-Reality replay of a real destination's live certificate is planned (see
-  [Current status](#current-status-known-gaps-for-future-agents)).
+  *inside* the VLESS+Reality stream instead of on the wire (gated by
+  `xray.stealth.enforce_control: true`).
 
 ## Architecture
 
@@ -82,15 +88,22 @@ Every device runs the **same binary**. Each is a *node*. Any node may act as the
 coordinator (on by default); the others treat it as the source of truth but still
 coordinate directly with each other. There is no separate "headscale" server.
 
-The coordination plane runs **one VLESS listener per node**:
+The coordination plane runs **one VLESS listener per node**, keyed by the
+per-server secret (`xray.secret` → `.xray_secret` next to `db.sqlite`; must be
+set explicitly for postgres so it survives restarts):
 
 - Every registered node gets its own port, derived deterministically from its
-  node ID: `port = hash("stealthscale-port:<id>")` mapped into the configured
-  range (`xray.listen_port` … `xray.max_listen_port`).
+  node ID and secret: `port = HMAC(secret,"node-port:<id>")` mapped into the
+  configured range (`xray.listen_port` … `xray.max_listen_port`) — enumerable
+  fallback `sha256("stealthscale-port:<id>")` only when no secret is set (tests).
 - Every node is authenticated by a deterministic UUID:
-  `UUIDv5("6ba7b810-9dad-11d1-80b4-00c04fd430c8", "stealthscale:<id>")`.
-- Because the UUID and port are derived from the node ID, they **never change
-  across restarts** — which is what makes a static client configuration possible.
+  `UUIDv5(HMAC(secret,"uuid-namespace")[:16], "node:<id>")` (fallback
+  `UUIDv5("6ba7b810-9dad-11d1-80b4-00c04fd430c8", "stealthscale:<id>")` only for
+  tests).
+- Because the UUID and port are derived from the node ID + secret, they **never
+  change across restarts when the secret is stable** — which is what makes a
+  static `vless://` URI (`pbk`, `sid`, `dest`, `fp`) possible (`stscale nodes
+  vless <id>`).
 
 When a peer connects (after discovery has identified it):
 
@@ -142,18 +155,17 @@ existing knowledge applies:
 
 ## Reality_XTLS and stealth-gated DERP
 
-StealthScale's default transport is **VLESS + uTLS-shaped TLS with a decoy
-certificate** (`xray.security: reality_xtls`). The server presents a decoy
-certificate for the configured `reality.Dest` SNI, and `utls` shapes the
-ClientHello to mimic Chrome/Firefox and defeat active probing. The client
-validates the server via the Reality public key rather than by trusting the
-presented certificate.
-
-> **Implementation note — this is not the real XTLS-Reality library (yet).**
-> The current build does **not** vendor `xray-core`/`go-reality`. It uses the Go
-> standard `crypto/tls` with a self-signed decoy certificate plus `utls` for
-> ClientHello shaping. Full XTLS-Reality replay of a real destination's live
-> certificate requires the `xray-core`/`go-reality` dependency and is planned.
+StealthScale's default transport is **VLESS + Reality (xtls/reality) + uTLS**
+(`xray.security: reality_xtls`). The server steals the live TLS handshake of
+the decoy dest (default `www.cloudflare.com:443`, dual decoys
+`www.cloudflare.com`/`www.microsoft.com` + bare domains) via
+`github.com/xtls/reality` (`hscontrol/xray/server.go:140`) and `utls` shapes
+the ClientHello to mimic Chrome/Firefox. The client validates the server via
+its Reality public key (`hscontrol/xray/reality_client.go:66`) and SessionId
+AEAD, not the certificate. `xray.reality.dest`, `server_names`, `short_ids`,
+`private_key`/`public_key`, and `spider_x` are all configurable (see
+`config-example.yaml:129`); `xray.secret` must be stable for postgres (see
+below).
 
 Because DERP relays are themselves fingerprintable, StealthScale **gates DERP
 fallback on stealth** (`xray.stealth.enforce: true`, the default). When the
@@ -178,16 +190,16 @@ done. It reflects the codebase at the time of writing:
   `state.State` when available, otherwise stub for coverage. Remaining: coordinator
   election UI and advanced node tag/route management. Use headscale-ui as the
   interaction-model reference.
-- **VLESS stealth transport implemented (not a log-only stub).**
-  `hscontrol/xray/server.go` generates an ephemeral self-signed certificate for
-  `reality.Dest` (the decoy SNI) and shapes the TLS `ClientHello` via
-  `applyUTLSFingerprint` (chrome/firefox/safari/randomized cipher suites and
-  curves). `hscontrol/xray/client.go` `DialVLESS` writes the VLESS header,
-  verifies the version ack over the (optionally TLS-wrapped) transport, and
-  validates the server by its Reality public key.
-  **Limitation:** this is `crypto/tls` + `utls` shaping, **not** the real
-  XTLS-Reality library — replaying a real destination's live certificate requires
-  the `xray-core`/`go-reality` dependency and is still TODO.
+- **VLESS stealth transport implemented via true Reality.**
+  `hscontrol/xray/server.go` uses `github.com/xtls/reality` (`reality.Config`,
+  `reality.Server`, `reality.DetectPostHandshakeRecordsLens`) to steal the
+  decoy dest's handshake (`www.cloudflare.com:443` by default, dual decoys) and
+  `applyUTLSFingerprint` for `utls` shaping. `hscontrol/xray/client.go`
+  `DialVLESS` + `hscontrol/xray/reality_client.go` `RealityUClient` (SessionId
+  AEAD, `VerifyPeerCertificate` via `HMAC-SHA512(pub, authKey)`) writes the VLESS
+  header, validates the server by its Reality public key, and verifies the
+  `0x00` ack (no longer skipped for `reality_xtls` — session tickets are
+  disabled on both sides to avoid `tls: unexpected message`).
 - **DERP fail-closed stealth gate is now enforced.** `hscontrol/stealth/stealth.go`
   `Checker.IsSatisfied()` drives `FilterDERPMap()` so that when stealth is not
   satisfied the advertised DERP map is empty (fail-closed). This previously was a

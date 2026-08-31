@@ -1,122 +1,52 @@
-# Official releases
+# Official releases (StealthScale)
 
-Official releases for stscale are available as binaries for various platforms and DEB packages for Debian and Ubuntu.
-Both are available on the [GitHub releases page](https://github.com/tomiwebpro/stealthscale/releases).
+!!! warning "StealthScale defaults differ from Headscale — read the stealth notes"
+
+    Headscale's install guides assume WireGuard. StealthScale defaults to **VLESS+Reality_XTLS** (`xray.enabled:true`, `xray.security:reality_xtls`, `xray.stealth.enforce:true`, `xray.stealth.enforce_control:true`) with per-node listeners on `10001`–`10100` and `xray.secret` auto-persisted to `.xray_secret`. The authoritative guide is [StealthScale Install & deploy](../../stealthscale/install.md) (VLESS+Reality_XTLS, `xray.stealth.enforce_control`, `.xray_secret` backup). This page is a thin wrapper for package users — keep `xray.*` at their defaults unless you need stock-client compat.
+
+Official releases for `stscale` are available as binaries and DEB packages on [GitHub releases](https://github.com/tomiwebpro/stealthscale/releases) (built as `stscale` via `.goreleaser.yml`, `CGO_ENABLED=0`, `binary: stscale`).
 
 ## Using packages for Debian/Ubuntu (recommended)
 
-It is recommended to use our DEB packages to install stscale on a Debian based system as those packages configure a
-local user to run stscale, provide a default configuration and ship with a systemd service file. Supported
-distributions are Ubuntu 22.04 or newer, Debian 12 or newer.
+DEB packages configure a local user, default config, and systemd service. Supported: Ubuntu 22.04+ / Debian 12+.
 
-1. Download the [latest stscale package](https://github.com/tomiwebpro/stealthscale/releases/latest) for your platform (`.deb` for Ubuntu and Debian).
+1. Download the latest package:
 
     ```shell
-    STSCALE_VERSION="" # See above URL for latest version, e.g. "X.Y.Z" (NOTE: do not add the "v" prefix!)
-    STSCALE_ARCH="" # Your system architecture, e.g. "amd64"
+    STSCALE_VERSION="" # e.g. "0.29.3" without v prefix
+    STSCALE_ARCH="" # amd64/arm64/arm
     wget --output-document=stscale.deb \
      "https://github.com/tomiwebpro/stealthscale/releases/download/v${STSCALE_VERSION}/stealthscale_${STSCALE_VERSION}_linux_${STSCALE_ARCH}.deb"
     ```
 
-1. Install stscale:
+1. Install:
 
     ```shell
     sudo apt install ./stscale.deb
     ```
 
-1. [Configure stscale by editing the configuration file](../../ref/configuration.md). An up-to date example
-   configuration file is also available in `/usr/share/doc/stealthscale/examples/config-example.yaml`:
+1. Configure by editing `/etc/stealthscale/config.yaml` (example also at `/usr/share/doc/stealthscale/examples/config-example.yaml`). **Keep stealth defaults**:
+
+    ```yaml
+    xray:
+      enabled: true
+      security: reality_xtls
+      secret: "" # auto to .xray_secret for sqlite; MUST set for postgres (openssl rand -hex 32)
+      utls_fingerprint: chrome
+      reality: { dest: "www.cloudflare.com:443", server_names: [www.cloudflare.com, www.microsoft.com, cloudflare.com, microsoft.com], spider_x: "/" }
+      stealth: { enforce: true, enforce_control: true }
+    ```
+
+    Also set `server_url`, `base_domain`, `prefixes`, and expose `10001`–`10100` (or your `xray.listen_port` … `max_listen_port`) plus `443` (and `3478/udp` if `derp.server.enabled:true`).
+
+1. Restart and verify:
 
     ```shell
-    sudo nano /etc/stealthscale/config.yaml
+    sudo systemctl restart stealthscale  # or stscale per package name — check systemctl list-units
+    sudo systemctl status stealthscale
+    stscale nodes vless 1  # stable URI (pbk/sid/dest) when xray.secret stable
+    curl -s http://127.0.0.1:8080/health | jq
+    curl -s http://127.0.0.1:8080/web | head  # embedded WebUI at /web and /admin
     ```
 
-1. Restart stscale to pick up configuration changes:
-
-    ```shell
-    sudo systemctl restart stscale
-    ```
-
-1. Verify that stscale is running as intended:
-
-    ```shell
-    sudo systemctl status stscale
-    ```
-
-Continue on the [getting started page](../../usage/getting-started.md) to register your first machine.
-
-## Using standalone binaries (advanced)
-
-!!! warning "Advanced"
-
-    This installation method is considered advanced as one needs to take care of the local user and the systemd
-    service themselves. If possible, use the [DEB packages](#using-packages-for-debianubuntu-recommended) or a
-    [community package](community.md) instead.
-
-This section describes the installation of stscale according to the [Requirements and
-assumptions](../requirements.md#assumptions). StealthScale is run by a dedicated local user and the service itself is
-managed by systemd.
-
-1. Download the latest [`stscale` binary from GitHub's release page](https://github.com/tomiwebpro/stealthscale/releases):
-
-    ```shell
-    sudo wget --output-document=/usr/bin/stscale \
-    https://github.com/tomiwebpro/stealthscale/releases/download/v<STSCALE VERSION>/stealthscale_<STSCALE VERSION>_linux_<ARCH>
-    ```
-
-1. Make `stscale` executable:
-
-    ```shell
-    sudo chmod +x /usr/bin/stscale
-    ```
-
-1. Add a dedicated local user to run stscale:
-
-    ```shell
-    sudo useradd \
-     --create-home \
-     --home-dir /var/lib/stealthscale/ \
-     --system \
-     --user-group \
-     --shell /usr/sbin/nologin \
-     stscale
-    ```
-
-1. Download the example configuration for your chosen version and save it as: `/etc/stealthscale/config.yaml`. Adjust the
-   configuration to suit your local environment. See [Configuration](../../ref/configuration.md) for details.
-
-    ```shell
-    sudo mkdir -p /etc/stealthscale
-    sudo nano /etc/stealthscale/config.yaml
-    ```
-
-1. Copy [stscale's systemd service file](https://github.com/tomiwebpro/stealthscale/blob/main/packaging/systemd/stscale.service)
-   to `/etc/systemd/system/stscale.service` and adjust it to suit your local setup. The following parameters likely need
-   to be modified: `ExecStart`, `WorkingDirectory`, `ReadWritePaths`.
-
-1. In `/etc/stealthscale/config.yaml`, override the default `stscale` unix socket with a path that is writable by the
-   `stscale` user or group:
-
-    ```yaml title="config.yaml"
-    unix_socket: /var/run/stealthscale/stscale.sock
-    ```
-
-1. Reload systemd to load the new configuration file:
-
-    ```shell
-    systemctl daemon-reload
-    ```
-
-1. Enable and start the new stscale service:
-
-    ```shell
-    systemctl enable --now stscale
-    ```
-
-1. Verify that stscale is running as intended:
-
-    ```shell
-    systemctl status stscale
-    ```
-
-Continue on the [getting started page](../../usage/getting-started.md) to register your first machine.
+Continue at [StealthScale clients](../../stealthscale/clients.md) (`stscale up --coordinator --vless-uri`). For container/source/community see the sibling pages, but all point back to [StealthScale Install & deploy](../../stealthscale/install.md) for VLESS identity and WebUI hardening.

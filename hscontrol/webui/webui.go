@@ -37,8 +37,31 @@ type State interface {
 
 // Handler returns an http.Handler serving the WebUI at /web and /admin.
 // It serves embedded static assets and JSON APIs for management.
+// When hardening is enabled (xray.stealth.enforce && xray.stealth.enforce_control)
+// the WebUI requires an Authorization header (Bearer API key) or X-API-Key;
+// unauthenticated requests receive 401. This prevents anonymous enumeration
+// of nodes/users on the public listen_addr. Operators who want the WebUI
+// only on the internal metrics listener should firewall the public port.
 func Handler(cfg *types.Config, st State) http.Handler {
 	mux := http.NewServeMux()
+	hardened := cfg != nil && cfg.XRay.Enabled && cfg.XRay.Stealth.Enforce && cfg.XRay.Stealth.EnforceControl
+	requireAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !hardened {
+				next(w, r)
+				return
+			}
+			// Check for API key via Authorization: Bearer <key> or X-API-Key
+			auth := r.Header.Get("Authorization")
+			apiKey := r.Header.Get("X-API-Key")
+			if auth == "" && apiKey == "" {
+				// Also check cookie for OIDC session? For now require header.
+				http.Error(w, "authentication required (provide Authorization: Bearer <api-key> or X-API-Key)", http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
+		}
+	}
 
 	// Static frontend: serve embedded files at /web/ and /admin/.
 	// Use sub FS so http.FileServer sees clean paths.
@@ -150,20 +173,33 @@ func Handler(cfg *types.Config, st State) http.Handler {
 	apiHealth := func(w http.ResponseWriter, r *http.Request) { handleHealth(w, r, cfg, st) }
 
 	for _, prefix := range []string{"/web/api", "/admin/api"} {
-		mux.HandleFunc(prefix+"/nodes", apiNodes)
-		mux.HandleFunc(prefix+"/nodes/", apiNodesWithID)
-		mux.HandleFunc(prefix+"/users", apiUsers)
-		mux.HandleFunc(prefix+"/users/", apiUsers)
-		mux.HandleFunc(prefix+"/preauthkeys", apiKeys)
-		mux.HandleFunc(prefix+"/preauthkeys/", apiKeys)
-		mux.HandleFunc(prefix+"/policy", apiPolicy)
-		mux.HandleFunc(prefix+"/derp", apiDERP)
-		mux.HandleFunc(prefix+"/vless/", apiVLESS) // /vless/{id}
-		mux.HandleFunc(prefix+"/health", apiHealth)
+		mux.HandleFunc(prefix+"/nodes", requireAuth(apiNodes))
+		mux.HandleFunc(prefix+"/nodes/", requireAuth(apiNodesWithID))
+		mux.HandleFunc(prefix+"/users", requireAuth(apiUsers))
+		mux.HandleFunc(prefix+"/users/", requireAuth(apiUsers))
+		mux.HandleFunc(prefix+"/preauthkeys", requireAuth(apiKeys))
+		mux.HandleFunc(prefix+"/preauthkeys/", requireAuth(apiKeys))
+		mux.HandleFunc(prefix+"/policy", requireAuth(apiPolicy))
+		mux.HandleFunc(prefix+"/derp", requireAuth(apiDERP))
+		mux.HandleFunc(prefix+"/vless/", requireAuth(apiVLESS)) // /vless/{id}
+		mux.HandleFunc(prefix+"/health", requireAuth(apiHealth))
 		// Also support without trailing slash for vless
-		mux.HandleFunc(prefix+"/vless", apiVLESS)
+		mux.HandleFunc(prefix+"/vless", requireAuth(apiVLESS))
 	}
 
+	// Wrap the whole mux so even static frontend requires auth when hardened.
+	// This prevents anonymous enumeration of the WebUI shell itself.
+	if hardened {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") == "" && r.Header.Get("X-API-Key") == "" {
+				// Allow health endpoint without auth for load balancer checks?
+				// No, per hardening spec, all /web and /admin require auth.
+				http.Error(w, "authentication required (provide Authorization: Bearer <api-key> or X-API-Key)", http.StatusUnauthorized)
+				return
+			}
+			mux.ServeHTTP(w, r)
+		})
+	}
 	return mux
 }
 

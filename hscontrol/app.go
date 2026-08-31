@@ -473,6 +473,7 @@ func securityHeaders(next http.Handler) http.Handler {
 func (h *StealthScale) gateDERPOnStealth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !derp.ShouldIncludeDERP(h.cfg) {
+			IncDERPGated()
 			http.Error(w, "stealth transport not satisfied", http.StatusMisdirectedRequest)
 			return
 		}
@@ -697,17 +698,20 @@ func (h *StealthScale) Serve() error {
 		derp.SetStealthChecker(stealth.New(&h.cfg.XRay))
 		defer derp.SetStealthChecker(nil)
 	}
+	SetStealthReady(false)
 
 	if err := h.StartXRayServer(ctx); err != nil {
 		return fmt.Errorf("starting xray server: %w", err)
 	}
 	// The stealth transport is now serving; lift the fail-closed DERP gate.
 	derp.MarkStealthReady()
+	SetStealthReady(true)
 
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), types.HTTPTimeout)
 		defer shutdownCancel()
 		h.StopXRayServer(shutdownCtx)
+		SetStealthReady(false)
 	}()
 
 	//

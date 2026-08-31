@@ -1,213 +1,65 @@
-# Frequently Asked Questions
+# Frequently Asked Questions (StealthScale)
 
-## What is the design goal of stscale?
+## How is StealthScale different from Headscale?
 
-StealthScale aims to implement a self-hosted, open source alternative to the
-[Tailscale](https://tailscale.com/) control server. StealthScale's goal is to
-provide self-hosters and hobbyists with an open-source server they can use for
-their projects and labs. It implements a narrow scope, a _single_ Tailscale
-network (tailnet), suitable for a personal use, or a small open-source
-organisation.
+StealthScale is a fork of [Headscale](https://github.com/juanfont/headscale) but replaces the WireGuard transport with **VLESS + Reality (xtls/reality) + uTLS**. Every device runs the same `stscale` binary — there is no privileged "head" server, and `stscale serve` (coordinator) and `stscale up` (node) are the same binary. See [StealthScale overview](../stealthscale/overview.md).
 
-## How can I contribute?
+## Why not WireGuard?
 
-StealthScale is "Open Source, acknowledged contribution", this means that any
-contribution will have to be discussed with the Maintainers before being submitted.
+WireGuard handshakes are fingerprintable. StealthScale's VLESS+Reality endpoint steals the TLS handshake of a real decoy site (`www.cloudflare.com:443` by default, `www.microsoft.com:443` second decoy) via `github.com/xtls/reality` (MPL-2.0) and shapes ClientHello with `utls` (`chrome`/`firefox`/`safari`/`ios`/`randomized`). Traffic looks like ordinary browser TLS. See [Threat model](../ref/threat-model.md) and [XRay/VLESS reference](../ref/xray-vless.md).
 
-Please see [Contributing](contributing.md) for more information.
+## Can I use a stock Tailscale client?
 
-## Why is 'acknowledged contribution' the chosen model?
+No, by default. Stock Tailscale dials WireGuard and speaks `noise` over raw TCP. StealthScale with `xray.stealth.enforce_control:true` (the default) exposes **only VLESS+Reality** — no `/ts2021` plaintext endpoint. You need:
 
-Both maintainers have full-time jobs and families, and we want to avoid burnout. We also want to avoid frustration from contributors when their PRs are not accepted.
+- the unified `stscale` binary (`stscale up --coordinator https://ctl.example.com --authkey <key> --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls&pbk=...&sid=...&dest=...&fp=chrome'`) — recommended, or
+- a Tailscale client patched to import `hscontrol/xray` (`DialVLESS` + `RealityUClient`), see [Client modification guide](../client-modification.md).
 
-We are more than happy to exchange emails, or to have dedicated calls before a PR is submitted.
+If you must support stock clients, set `xray.stealth.enforce_control:false` (plaintext `/ts2021` remains fingerprintable).
 
-## When/Why is Feature X going to be implemented?
+## How do I get the VLESS URI for a node?
 
-We use [GitHub Milestones to plan for upcoming StealthScale releases](https://github.com/tomiwebpro/stealthscale/milestones).
-Have a look at [our current plan](https://github.com/tomiwebpro/stealthscale/milestones) to get an idea when a specific
-feature is about to be implemented. The release plan is subject to change at any time.
+On the coordinator:
 
-If you're interested in contributing, please post a feature request about it. Please be aware that there are a number of
-reasons why we might not accept specific contributions:
+```shell
+stscale nodes vless <node-id>
+# vless://<uuid>@<addr>:<port>?security=reality_xtls&fp=chrome&type=tcp&flow=xtls-rprx-vision&dest=www.cloudflare.com%3A443&pbk=<pubkey>&sid=<shortId>&spx=%2F
+```
 
-- It is not possible to implement the feature in a way that makes sense in a self-hosted environment.
-- Given that we are reverse-engineering Tailscale to satisfy our own curiosity, we might be interested in implementing the feature ourselves.
-- You are not sending unit and integration tests with it.
+`pbk` is the Reality public key (hex 32 bytes), `sid` the shortId, `dest` the decoy, `spx` the SpiderX. All derived deterministically from `xray.secret` via `HMAC(secret, label)` — stable across restarts when the secret is stable. See [XRay/VLESS reference](../ref/xray-vless.md).
 
-## Do you support Y method of deploying stscale?
+## What is `xray.secret` and why does postgres require it?
 
-We currently support deploying stscale using our binaries and the DEB packages. Visit our [installation guide using
-official releases](../setup/install/official.md) for more information.
+`xray.secret` keys the per-node UUID/port (`UUIDv5(HMAC(secret,"uuid-namespace")[:16], "node:<id>")` and `HMAC(secret,"node-port:<id>")`) and the Reality keypair/shortId. For `sqlite` it is auto-persisted to `.xray_secret` next to `db.sqlite`. For `postgres` there is no local file, so you **must** set `xray.secret` explicitly (`openssl rand -hex 32`) or `stscale` refuses to start. Rotating the secret changes every node's `vless://` URI — re-issue with `stscale nodes vless <id>`.
 
-In addition to that, you may use packages provided by the community or from distributions. Learn more in the
-[installation guide using community packages](../setup/install/community.md).
+## Why is DERP empty / why do clients have no relay?
 
-For convenience, we also [build container images with stscale](../setup/install/container.md). But **please be aware that
-we don't officially support deploying stscale using Docker**. On our [Discord server](https://discord.gg/c84AZQhmpx)
-we have a "docker-issues" channel where you can ask for Docker-specific help to the community.
-
-## What is the recommended update path? Can I skip multiple versions while updating?
-
-Please follow the steps outlined in the [upgrade guide](../setup/upgrade.md) to update your existing StealthScale
-installation. Its required to update from one stable version to the next (e.g. 0.26.0 → 0.27.1 → 0.28.0) without
-skipping minor versions in between. You should always pick the latest available patch release.
-
-Be sure to check the [changelog](https://github.com/tomiwebpro/stealthscale/blob/main/CHANGELOG.md) for version specific
-upgrade instructions and breaking changes.
-
-## Scaling / How many clients does StealthScale support?
-
-It depends. As often stated, StealthScale is not enterprise software and our focus
-is homelabbers and self-hosters. Of course, we do not prevent people from using
-it in a commercial/professional setting and often get questions about scaling.
-
-Please note that when StealthScale is developed, performance is not part of the
-consideration as the main audience is considered to be users with a modest
-amount of devices. We focus on correctness and feature parity with Tailscale
-SaaS over time.
-
-To understand if you might be able to use StealthScale for your use case, I will
-describe two scenarios in an effort to explain what is the central bottleneck
-of StealthScale:
-
-1. An environment with 1000 servers
-
-    - they rarely "move" (change their endpoints)
-    - new nodes are added rarely
-
-1. An environment with 80 laptops/phones (end user devices)
-
-    - nodes move often, e.g. switching from home to office
-
-StealthScale calculates a map of all nodes that need to talk to each other,
-creating this "world map" requires a lot of CPU time. When an event that
-requires changes to this map happens, the whole "world" is recalculated, and a
-new "world map" is created for every node in the network.
-
-This means that under certain conditions, StealthScale can likely handle 100s
-of devices (maybe more), if there is _little to no change_ happening in the
-network. For example, in Scenario 1, the process of computing the world map is
-extremely demanding due to the size of the network, but when the map has been
-created and the nodes are not changing, the StealthScale instance will likely
-return to a very low resource usage until the next time there is an event
-requiring the new map.
-
-In the case of Scenario 2, the process of computing the world map is less
-demanding due to the smaller size of the network, however, the type of nodes
-will likely change frequently, which would lead to a constant resource usage.
-
-StealthScale will start to struggle when the two scenarios overlap, e.g. many nodes
-with frequent changes will cause the resource usage to remain constantly high.
-In the worst case scenario, the queue of nodes waiting for their map will grow
-to a point where StealthScale never will be able to catch up, and nodes will never
-learn about the current state of the world.
-
-We expect that the performance will improve over time as we improve the code
-base, but it is not a focus. In general, we will never make the tradeoff to make
-things faster on the cost of less maintainable or readable code. We are a small
-team and have to optimise for maintainability.
+StealthScale **gates DERP on stealth** (`xray.stealth.enforce:true`, default). When `stealth.Checker.IsSatisfied()` is false (Reality not serving), `FilterDERPMap()` returns an empty `DERPMap` (fail-closed) so clients cannot leak traffic through fingerprintable relays. When stealth is satisfied, the full DERP map is served. Verify with `curl http://127.0.0.1:8080/web/api/derp | jq .stealth_satisfied` or `go test ./hscontrol/stealth -v`. See [XRay/VLESS reference](../ref/xray-vless.md).
 
 ## Which database should I use?
 
-We recommend the use of SQLite as database for stscale:
+SQLite is recommended. StealthScale is tested primarily on SQLite. PostgreSQL works but requires `xray.secret` to be set explicitly and is considered legacy.
 
-- SQLite is simple to setup and easy to use
-- It scales well for all of stscale's use cases
-- Development and testing happens primarily on SQLite
-- PostgreSQL is still supported, but is considered to be in "maintenance mode"
+## How do I upgrade?
 
-The stscale project itself does not provide a tool to migrate from PostgreSQL to SQLite. Please have a look at [the
-related tools documentation](../ref/integration/tools.md) for migration tooling provided by the community.
+Follow [Upgrade](../setup/upgrade.md) and always keep `xray.secret` and `xray.reality.*` stable. Backup `db.sqlite` **and** `.xray_secret` (for sqlite) or `xray.secret` value (for postgres) before upgrading. See [Install & deploy](../stealthscale/install.md#upgrading-from-headscale--old-stealthscale).
 
-The choice of database has little to no impact on the performance of the server,
-see [Scaling / How many clients does StealthScale support?](#scaling-how-many-clients-does-stscale-support) for understanding how StealthScale spends its resources.
+## Scaling?
 
-## Why is my reverse proxy not working with stscale?
+StealthScale inherits Headscale's scaling: the map that computes per-node peer visibility is expensive (`NodeStore` copy-on-write snapshot, `state.State.UpdateNodeFromMapRequest` hot path). It handles hundreds of largely-static nodes well, but many frequently-moving nodes (laptops/phones switching endpoints) keep CPU busy. The VLESS listener per node adds a port in `[xray.listen_port, xray.max_listen_port]` per node — size the range for your tailnet.
 
-We don't know. We don't use reverse proxies with stscale ourselves, so we don't have any experience with them. We have
-[community documentation](../ref/integration/reverse-proxy.md) on how to configure various reverse proxies, and a
-dedicated "reverse-proxy-issues" channel on our [Discord server](https://discord.gg/c84AZQhmpx) where you can ask for
-help to the community.
+## My policy is invalid and StealthScale refuses to start?
 
-## Can I use stscale and tailscale on the same machine?
+Dump, fix, and reload via direct DB access (requires full config with DB settings):
 
-Running stscale on a machine that is also in the tailnet can cause problems with subnet routers, traffic relay nodes, and MagicDNS. It might work, but it is not supported.
+```shell
+stscale policy get --bypass-server-and-access-database-directly > policy.json
+stscale policy check --file policy.json
+stscale policy set --bypass-server-and-access-database-directly --file policy.json
+```
 
-## Why do two nodes see each other in their status, even if a policy rule allows traffic only in one direction?
+Also available via WebUI `PUT /web/api/policy` (`hscontrol/webui/webui.go`).
 
-A frequent use case is to allow traffic only from one node to another, but not the other way around. For example, the
-workstation of an administrator should be able to connect to all nodes but the nodes themselves shouldn't be able to
-connect back to the administrator's node. Why do all nodes see the administrator's workstation in the output of
-`tailscale status`?
+## Where do I get help?
 
-This is essentially how Tailscale works. If traffic is allowed to flow in one direction, then both nodes see each other
-in their output of `tailscale status`. Traffic is still filtered according to the policy, with the exception of
-`tailscale ping` which is always allowed in either direction.
-
-See also <https://tailscale.com/docs/concepts/device-visibility>.
-
-## My policy is stored in the database and StealthScale refuses to start due to an invalid policy. How can I recover?
-
-StealthScale checks if the policy is valid during startup and refuses to start if it detects an error. The error message
-indicates which part of the policy is invalid. Follow these steps to fix your policy:
-
-- Dump the policy to a file: `stscale policy get --bypass-server-and-access-database-directly > policy.json`
-- Edit and fixup `policy.json`. Use the command `stscale policy check --file policy.json` to validate the policy.
-- Load the modified policy: `stscale policy set --bypass-server-and-access-database-directly --file policy.json`
-- Start StealthScale as usual.
-
-!!! warning "Full server configuration required"
-
-    The above commands to get/set the policy require a complete server configuration file including database settings. A
-    minimal config to [control StealthScale via remote CLI](../ref/api.md#remote-control) is not sufficient. You may use
-    `stscale -c /path/to/config.yaml` to specify the path to an alternative configuration file.
-
-## How can I migrate back to the recommended IP prefixes?
-
-Tailscale only supports the IP prefixes `100.64.0.0/10` and `fd7a:115c:a1e0::/48` or smaller subnets thereof. The
-following steps can be used to migrate from unsupported IP prefixes back to the supported and recommended ones.
-
-!!! warning "Backup and test in a demo environment required"
-
-    The commands below update the IP addresses of all nodes in your tailnet and this might have a severe impact in your
-    specific environment. At a minimum:
-
-    - [Create a backup of your database](../setup/upgrade.md#backup)
-    - Test the commands below in a representive demo environment. This allows to catch subsequent connectivity errors
-      early and see how the tailnet behaves in your specific environment.
-
-- Stop StealthScale
-- Restore the default prefixes in the [configuration file](../ref/configuration.md):
-    ```yaml
-    prefixes:
-      v4: 100.64.0.0/10
-      v6: fd7a:115c:a1e0::/48
-    ```
-- Update the `nodes.ipv4` and `nodes.ipv6` columns in the database and assign each node a unique IPv4 and IPv6 address.
-  The following SQL statement assigns IP addresses based on the node ID:
-    ```sql
-    UPDATE nodes
-    SET ipv4=concat('100.64.', id/256, '.', id%256),
-        ipv6=concat('fd7a:115c:a1e0::', format('%x', id));
-    ```
-- Update the [policy](../ref/policy.md) to reflect the IP address changes (if any)
-- Start StealthScale
-
-Nodes should reconnect within a few seconds and pickup their newly assigned IP addresses.
-
-## How can I avoid to send logs to Tailscale Inc?
-
-A Tailscale client [collects logs about its operation and connection attempts with other
-clients](https://tailscale.com/docs/features/logging#client-logs) and sends them to a central log service operated by
-Tailscale Inc.
-
-StealthScale, by default, instructs clients to disable log submission to the central log service. This configuration is
-applied by a client once it successfully connected with StealthScale. See the configuration option `logtail.enabled` in the
-[configuration file](../ref/configuration.md) for details.
-
-Alternatively, logging can also be disabled on the client side. This is independent of StealthScale and opting out of
-client logging disables log submission early during client startup. The configuration is operating system specific and
-is usually achieved by setting the environment variable `TS_NO_LOGS_NO_SUPPORT=true` or by passing the flag
-`--no-logs-no-support` to `tailscaled`. See <https://tailscale.com/docs/features/logging#opt-out-of-client-logging> for
-details.
+Join our Discord `discord.gg/c84AZQhmpx` and see [Getting help](./help.md). Report StealthScale-specific stealth/VLESS issues via GitHub issues `github.com/tomiwebpro/stealthscale/issues`.

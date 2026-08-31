@@ -313,6 +313,9 @@ var nodeVLESSCommand = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("invalid node ID: %w", err)
 		}
+		if viper.GetString("database.type") == "postgres" && viper.GetString("xray.secret") == "" {
+			return fmt.Errorf("xray.secret is required when database.type is postgres (no local .xray_secret); generate with 'openssl rand -hex 32' and set xray.secret in config.yaml")
+		}
 
 		secret, publicKey, shortID, dest := types.ResolveXRayIdentity()
 		config := &xray.VLESSConfig{

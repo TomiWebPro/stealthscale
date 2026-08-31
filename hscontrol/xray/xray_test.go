@@ -19,6 +19,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,14 @@ import (
 )
 
 func primeRealityLens(key string) {
+	// Test-only helper for the self-signed 127.0.0.1 dest. Production
+	// dests (www.cloudflare.com, www.microsoft.com) must go through
+	// reality.DetectPostHandshakeRecordsLens which dials the real dest;
+	// pre-populating the lens would hide the 2044-byte EncryptedExtensions
+	// handling bug (tls.go:341) and the 5s poll in tls.go:404.
+	if !strings.Contains(key, "127.0.0.1") {
+		return
+	}
 	reality.GlobalPostHandshakeRecordsLens.Store(key, []int{})
 	reality.GlobalMaxCSSMsgCount.Store(key, 1)
 }

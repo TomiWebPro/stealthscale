@@ -38,4 +38,29 @@ var (
 		Name:      "mapresponse_ended_total",
 		Help:      "total count of new mapsessions ended",
 	}, []string{"reason"})
+
+	derpGatedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: prometheusNamespace,
+		Name:      "derp_gated_total",
+		Help:      "total count of DERP gate suppressions (fail-closed when stealth not satisfied)",
+	})
+	stealthReadyGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: prometheusNamespace,
+		Name:      "stealth_ready",
+		Help:      "whether stealth transport is ready (1) or not (0)",
+	})
 )
+
+// SetStealthReady sets the stealth_ready gauge (1 for ready, 0 for not).
+func SetStealthReady(ready bool) {
+	if ready {
+		stealthReadyGauge.Set(1)
+	} else {
+		stealthReadyGauge.Set(0)
+	}
+}
+
+// IncDERPGated increments the derp_gated_total counter.
+func IncDERPGated() {
+	derpGatedTotal.Inc()
+}

@@ -1,8 +1,12 @@
-# DERP
+# DERP (Stealth-gated)
+
+!!! warning "Stealth-gated DERP — fail-closed when Reality not satisfied"
+
+    StealthScale gates DERP on `xray.stealth.enforce:true` (default). When `hscontrol/stealth/stealth.go` `Checker.IsSatisfied()==false` (VLESS+Reality not serving or not ready), `FilterDERPMap()` returns **empty** `Regions: map[int]*DERPRegion{}` and `hscontrol/app.go` serves an empty DERP map to clients — **no relay, no STUN leak** (fail-closed). This is intentional: DERP relays are fingerprintable. Only when stealth is satisfied is the full DERP map served. Verify with `curl -s http://127.0.0.1:8080/web/api/derp | jq .stealth_satisfied` or `go test ./hscontrol/stealth -v` and check `/web` DERP tab badge. See [XRay/VLESS reference](./xray-vless.md) and [Threat model](./threat-model.md). Holepunching via STUN/DERP is exempt and only offered when stealth satisfied.
 
 A [DERP (Designated Encrypted Relay for Packets) server](https://tailscale.com/docs/reference/derp-servers) is mainly
 used to relay traffic between two nodes in case a direct connection can't be established. StealthScale provides an embedded
-DERP server to ensure seamless connectivity between nodes.
+DERP server to ensure seamless connectivity between nodes, but it is **stealth-gated** by default.
 
 ## Configuration
 
@@ -10,11 +14,9 @@ DERP related settings are configured within the `derp` section of the [configura
 following sections only use a few of the available settings, check the [example configuration](configuration.md) for
 all available configuration options.
 
-### Enable embedded DERP
+### Enable embedded DERP (stealth-gated)
 
-StealthScale ships with an embedded DERP server which allows to run your own self-hosted DERP server easily. The embedded
-DERP server is disabled by default and needs to be enabled. In addition, you should configure the public IPv4 and public
-IPv6 address of your StealthScale server for improved connection stability:
+StealthScale ships with an embedded DERP server. It is **disabled by default** (`derp.server.enabled:false`) and, crucially, **gated by stealth** — even when enabled it is only advertised to clients when Reality is satisfied. Configure public IPs for stability:
 
 ```yaml title="config.yaml" hl_lines="3-5"
 derp:
@@ -30,9 +32,7 @@ traversal. [Check DERP server connectivity](#check-derp-server-connectivity) to 
 
 ### Remove Tailscale's DERP servers
 
-Once enabled, StealthScale's embedded DERP is added to the list of free-to-use [DERP
-servers](https://tailscale.com/docs/reference/derp-servers) offered by Tailscale Inc. To only use StealthScale's embedded
-DERP server, disable the loading of the default DERP map:
+StealthScale defaults `derp.urls: []` — **no public Tailscale DERP** is loaded. This is intentional for stealth (public DERP leaks relay topology). If you migrated from Headscale where `urls: [https://controlplane.tailscale.com/derpmap/default]` was set, remove it to match the stealth default. To only use the embedded DERP (still stealth-gated):
 
 ```yaml title="config.yaml" hl_lines="6"
 derp:
@@ -129,10 +129,9 @@ maps fetched via URL or to offer your own, custom DERP servers to nodes.
 Independent of the custom DERP map, you may choose to [enable the embedded DERP server and have it automatically added
 to the custom DERP map](#enable-embedded-derp).
 
-### Verify clients
+### Verify clients (and stealth gating)
 
-Access to DERP serves can be restricted to nodes that are members of your Tailnet. Relay access is denied for unknown
-clients.
+Access to DERP is restricted to tailnet members, and further **gated by stealth** (empty map when not satisfied). Check `.stealth_satisfied` in `/web/api/derp` and the `stealthscale_stealth_ready` gauge at `http://127.0.0.1:9090/metrics`.
 
 === "Embedded DERP"
 

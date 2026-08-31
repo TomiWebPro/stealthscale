@@ -14,8 +14,12 @@ release:
     Please follow the steps outlined in the [upgrade guide](https://stealthscale.net/stable/setup/upgrade/) to update your existing StealthScale installation.
 
 builds:
+  # Single unified binary: stscale is both coordinator and node.
+  # There is no separate client binary — the same binary runs as client via `stscale up`
+  # and as server via `stscale serve`. The VLESS+Reality transport is built in.
   - id: stealthscale
     main: ./cmd/stealthscale
+    binary: stscale
     mod_timestamp: "{{ .CommitTimestamp }}"
     env:
       - CGO_ENABLED=0
@@ -25,6 +29,9 @@ builds:
       - freebsd_amd64
       - linux_amd64
       - linux_arm64
+      - linux_arm
+      - windows_amd64
+      - windows_arm64
     flags:
       - -mod=readonly
 

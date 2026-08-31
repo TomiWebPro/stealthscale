@@ -42,7 +42,7 @@ func dialVLESS(tb testing.TB, addr string, nodeID types.NodeID) net.Conn {
 	require.NoError(tb, err)
 	tb.Cleanup(func() { conn.Close() })
 
-	uuidBytes, err := uuid.Parse(xray.NodeUUID(nodeID))
+	uuidBytes, err := uuid.Parse(xray.NodeUUID(nodeID, ""))
 	require.NoError(tb, err)
 
 	header := make([]byte, 0, 18)
@@ -145,7 +145,7 @@ func TestVLESSNoiseRegistrationE2E(t *testing.T) {
 
 	ts.StartXRay(t)
 
-	port := xray.NodePort(nodeID, xrayTestPortStart, xrayTestPortEnd)
+	port := xray.NodePort(nodeID, "", xrayTestPortStart, xrayTestPortEnd)
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 
 	conn := dialVLESS(t, addr, nodeID)
@@ -184,7 +184,7 @@ func TestVLESSRejectsWrongUUID(t *testing.T) {
 	other := ts.CreateRegisteredNode(t, user, "vless-node-b")
 	ts.StartXRay(t)
 
-	port := xray.NodePort(nv.ID(), xrayTestPortStart, xrayTestPortEnd)
+	port := xray.NodePort(nv.ID(), "", xrayTestPortStart, xrayTestPortEnd)
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 
 	// Dial node A's listener but present node B's UUID.
@@ -192,7 +192,7 @@ func TestVLESSRejectsWrongUUID(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { conn.Close() })
 
-	uuidBytes, err := uuid.Parse(xray.NodeUUID(other.ID()))
+	uuidBytes, err := uuid.Parse(xray.NodeUUID(other.ID(), ""))
 	require.NoError(t, err)
 
 	header := make([]byte, 0, 18)
@@ -225,7 +225,7 @@ func TestVLESSListenerAutoCreatedForRegisteredNode(t *testing.T) {
 	require.Equal(t, 1, nodes.Len())
 	nodeID := nodes.At(0).ID()
 
-	port := xray.NodePort(nodeID, xrayTestPortStart, xrayTestPortEnd)
+	port := xray.NodePort(nodeID, "", xrayTestPortStart, xrayTestPortEnd)
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 
 	// The registration hook must have started a listener for the node even
