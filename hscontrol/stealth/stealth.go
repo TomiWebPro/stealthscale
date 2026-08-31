@@ -45,7 +45,9 @@ func (c *Checker) SetReady(ready bool) {
 
 // IsSatisfied reports whether stealth is satisfied and DERP fallback is allowed.
 // When Stealth.Enforce is false, always true. When true, DERP is only offered
-// while the reality_xtls transport is actually serving (fail-closed).
+// while the stealth transport is actually serving (fail-closed) — applies to
+// any security setting (reality_xtls, none, tls, xtls) to avoid leaking
+// fingerprintable relay traffic when stealth is enforced but not ready.
 func (c *Checker) IsSatisfied() bool {
 	if c.cfg == nil || !c.cfg.Enabled {
 		return true
@@ -57,9 +59,8 @@ func (c *Checker) IsSatisfied() bool {
 	if sec == "reality" {
 		sec = "reality_xtls"
 	}
-	if sec != "reality_xtls" {
-		// Non-stealth transport -> stealth gating irrelevant
-		return true
+	if sec == "" {
+		sec = "reality_xtls"
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
