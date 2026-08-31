@@ -7,7 +7,7 @@ import (
 	"maps"
 	"net/url"
 	"os"
-	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -543,7 +543,7 @@ func writeDebugMapResponse(
 	}
 
 	perms := fs.FileMode(debugMapResponsePerm)
-	mPath := path.Join(debugDumpMapResponsePath, fmt.Sprintf("%d", nodeID))
+	mPath := filepath.Join(debugDumpMapResponsePath, fmt.Sprintf("%d", nodeID))
 
 	err = os.MkdirAll(mPath, perms)
 	if err != nil {
@@ -552,7 +552,7 @@ func writeDebugMapResponse(
 
 	now := time.Now().Format("2006-01-02T15-04-05.999999999")
 
-	mapResponsePath := path.Join(
+	mapResponsePath := filepath.Join(
 		mPath,
 		fmt.Sprintf("%s-%s.json", now, t),
 	)
@@ -594,7 +594,7 @@ func ReadMapResponsesFromDirectory(dir string) (map[types.NodeID][]tailcfg.MapRe
 
 		nodeID := types.NodeID(nodeIDu)
 
-		files, err := os.ReadDir(path.Join(dir, node.Name()))
+		files, err := os.ReadDir(filepath.Join(dir, node.Name()))
 		if err != nil {
 			log.Error().Err(err).Msgf("reading dir %s", node.Name())
 			continue
@@ -609,7 +609,7 @@ func ReadMapResponsesFromDirectory(dir string) (map[types.NodeID][]tailcfg.MapRe
 				continue
 			}
 
-			body, err := os.ReadFile(path.Join(dir, node.Name(), file.Name()))
+			body, err := os.ReadFile(filepath.Join(dir, node.Name(), file.Name()))
 			if err != nil {
 				log.Error().Err(err).Msgf("reading file %s", file.Name())
 				continue

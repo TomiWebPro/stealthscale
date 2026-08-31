@@ -192,24 +192,29 @@ func newStealthScaleCLIWithConfig() (context.Context, *clientv1.ClientWithRespon
 	return ctx, client, cancel, nil
 }
 
-// newSocketClient builds an API client that dials the local unix socket. The
-// base-URL host is irrelevant; the custom dialer routes every request to the
-// socket.
+// newSocketClient builds an API client that dials the local control socket.
+// The base-URL host is irrelevant; the custom dialer routes every request to the
+// socket. On Windows the socket is a named pipe (\\.\pipe\stealthscale) via
+// go-winio; on Unix it is a unix-domain socket.
 func newSocketClient(socketPath string) (*clientv1.ClientWithResponses, error) {
-	// Probe for a clearer permission error up front. [os.OpenFile] on a unix
-	// socket returns ENXIO on Linux (expected); only permission errors are
-	// actionable. The real connection goes through [net.Dial].
-	socket, err := os.OpenFile(socketPath, os.O_WRONLY, SocketWritePermissions) //nolint
-	if err != nil {
-		if os.IsPermission(err) {
-			return nil, fmt.Errorf(
-				"unable to read/write to stealthscale socket %q, do you have the correct permissions? %w",
-				socketPath,
-				err,
-			)
+	// Named pipes do not need the OpenFile probe — they are not filesystem
+	// entries and the probe would return a misleading error.
+	if !util.IsNamedPipe(socketPath) {
+		// Probe for a clearer permission error up front. [os.OpenFile] on a unix
+		// socket returns ENXIO on Linux (expected); only permission errors are
+		// actionable. The real connection goes through [net.Dial].
+		socket, err := os.OpenFile(socketPath, os.O_WRONLY, SocketWritePermissions) //nolint
+		if err != nil {
+			if os.IsPermission(err) {
+				return nil, fmt.Errorf(
+					"unable to read/write to stealthscale socket %q, do you have the correct permissions? %w",
+					socketPath,
+					err,
+				)
+			}
+		} else {
+			socket.Close()
 		}
-	} else {
-		socket.Close()
 	}
 
 	httpClient := &http.Client{
@@ -226,11 +231,11 @@ func newSocketClient(socketPath string) (*clientv1.ClientWithResponses, error) {
 	)
 }
 
-// dialStealthScaleSocket connects to the unix socket, retrying until it appears or
-// ctx (the CLI timeout) expires. The socket is created late in startup (after
-// noise key, database, migrations), so a command run right after the server
-// starts can race its creation; retrying preserves the old gRPC client's
-// blocking-dial tolerance rather than failing on a not-yet-present socket.
+// dialStealthScaleSocket connects to the control socket, retrying until it appears or
+// ctx (the CLI timeout) expires. On Unix this is a unix-domain socket; on Windows
+// a named pipe. The socket/pipe is created late in startup (after noise key,
+// database, migrations), so a command run right after the server starts can race
+// its creation; retrying preserves the old gRPC client's blocking-dial tolerance.
 func dialStealthScaleSocket(ctx context.Context, socketPath string) (net.Conn, error) {
 	b := backoff.NewExponentialBackOff()
 	b.InitialInterval = 50 * time.Millisecond

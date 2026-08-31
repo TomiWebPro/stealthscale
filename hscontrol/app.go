@@ -10,12 +10,10 @@ import (
 	"net/http"
 	_ "net/http/pprof" // nolint
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -410,17 +408,6 @@ func (h *StealthScale) scheduledTasks(ctx context.Context) {
 	}
 }
 
-// ensureUnixSocketIsAbsent will check if the given path for stealthscales unix socket is clear
-// and will remove it if it is not.
-func (h *StealthScale) ensureUnixSocketIsAbsent() error {
-	// File does not exist, all fine
-	if _, err := os.Stat(h.cfg.UnixSocket); errors.Is(err, os.ErrNotExist) { //nolint:noinlineerr
-		return nil
-	}
-
-	return os.Remove(h.cfg.UnixSocket)
-}
-
 // controlPlanePaths are the Tailscale/Headscale control-protocol endpoints.
 // We deliberately do NOT emit security headers on these: the extra
 // X-Frame-Options / CSP / X-Content-Type-Options headers are themselves a
@@ -719,26 +706,9 @@ func (h *StealthScale) Serve() error {
 	// Set up LOCAL listeners
 	//
 
-	err = h.ensureUnixSocketIsAbsent()
-	if err != nil {
-		return fmt.Errorf("removing old socket file: %w", err)
-	}
-
-	socketDir := filepath.Dir(h.cfg.UnixSocket)
-
-	err = util.EnsureDir(socketDir)
-	if err != nil {
-		return fmt.Errorf("setting up unix socket: %w", err)
-	}
-
-	socketListener, err := new(net.ListenConfig).Listen(context.Background(), "unix", h.cfg.UnixSocket)
+	socketListener, err := h.listenSocket(context.Background())
 	if err != nil {
 		return fmt.Errorf("setting up socket: %w", err)
-	}
-
-	// Change socket permissions
-	if err := os.Chmod(h.cfg.UnixSocket, h.cfg.UnixSocketPermission); err != nil { //nolint:noinlineerr
-		return fmt.Errorf("changing socket permission: %w", err)
 	}
 
 	// The Huma v1 API mux matches full /api/v1/... paths and is shared by
@@ -864,19 +834,13 @@ func (h *StealthScale) Serve() error {
 
 	// Handle common process-killing signals so we can gracefully shut down:
 	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc,
-		syscall.SIGHUP,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGQUIT,
-		syscall.SIGHUP)
+	setupSignalNotify(sigc)
 
 	sigFunc := func(c chan os.Signal) {
 		// Wait for a SIGINT or SIGKILL:
 		for {
 			sig := <-c
-			switch sig {
-			case syscall.SIGHUP:
+			if isSIGHUP(sig) {
 				log.Info().
 					Str("signal", sig.String()).
 					Msg("Received SIGHUP, reloading ACL policy")
@@ -893,7 +857,7 @@ func (h *StealthScale) Serve() error {
 
 				h.Change(changes...)
 
-			default:
+			} else {
 				info := func(msg string) { log.Info().Msg(msg) }
 
 				log.Info().

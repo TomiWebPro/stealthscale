@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -654,9 +655,33 @@ func LoadConfig(path string, isFile bool) error {
 		viper.SetConfigName("config")
 
 		if path == "" {
-			viper.AddConfigPath("/etc/stealthscale/")
-			viper.AddConfigPath("$HOME/.stealthscale")
-			viper.AddConfigPath(".")
+			switch runtime.GOOS {
+			case "windows":
+				if pd := os.Getenv("ProgramData"); pd != "" {
+					viper.AddConfigPath(filepath.Join(pd, "stealthscale"))
+				} else {
+					viper.AddConfigPath(`C:\ProgramData\stealthscale`)
+				}
+				if ad := os.Getenv("APPDATA"); ad != "" {
+					viper.AddConfigPath(filepath.Join(ad, "stealthscale"))
+				}
+				viper.AddConfigPath(".")
+			case "darwin":
+				viper.AddConfigPath("/usr/local/etc/stealthscale/")
+				viper.AddConfigPath("/Library/Application Support/stealthscale/")
+				if home := os.Getenv("HOME"); home != "" {
+					viper.AddConfigPath(filepath.Join(home, "Library", "Application Support", "stealthscale"))
+					viper.AddConfigPath(filepath.Join(home, ".stealthscale"))
+				} else {
+					viper.AddConfigPath("$HOME/Library/Application Support/stealthscale")
+					viper.AddConfigPath("$HOME/.stealthscale")
+				}
+				viper.AddConfigPath(".")
+			default:
+				viper.AddConfigPath("/etc/stealthscale/")
+				viper.AddConfigPath("$HOME/.stealthscale")
+				viper.AddConfigPath(".")
+			}
 		} else {
 			// For testing
 			viper.AddConfigPath(path)
@@ -670,7 +695,22 @@ func LoadConfig(path string, isFile bool) error {
 
 	viper.SetDefault("policy.mode", "file")
 
-	viper.SetDefault("tls_letsencrypt_cache_dir", "/var/www/.cache")
+	switch runtime.GOOS {
+	case "windows":
+		pd := os.Getenv("ProgramData")
+		if pd == "" {
+			pd = `C:\ProgramData`
+		}
+		viper.SetDefault("tls_letsencrypt_cache_dir", filepath.Join(pd, "stealthscale", "cache"))
+	case "darwin":
+		if home := os.Getenv("HOME"); home != "" {
+			viper.SetDefault("tls_letsencrypt_cache_dir", filepath.Join(home, "Library", "Caches", "stealthscale"))
+		} else {
+			viper.SetDefault("tls_letsencrypt_cache_dir", "/Library/Caches/stealthscale")
+		}
+	default:
+		viper.SetDefault("tls_letsencrypt_cache_dir", "/var/www/.cache")
+	}
 	viper.SetDefault("tls_letsencrypt_challenge_type", HTTP01ChallengeType)
 
 	viper.SetDefault("log.level", "info")
@@ -689,7 +729,15 @@ func LoadConfig(path string, isFile bool) error {
 	viper.SetDefault("derp.server.automatically_add_embedded_derp_region", true)
 	viper.SetDefault("derp.update_frequency", "3h")
 
-	viper.SetDefault("unix_socket", "/var/run/stealthscale/stealthscale.sock")
+	switch runtime.GOOS {
+	case "windows":
+		viper.SetDefault("unix_socket", `\\.\pipe\stealthscale`)
+	case "darwin":
+		// Keep /var/run for system daemon; user installs may override to $TMPDIR.
+		viper.SetDefault("unix_socket", "/var/run/stealthscale/stealthscale.sock")
+	default:
+		viper.SetDefault("unix_socket", "/var/run/stealthscale/stealthscale.sock")
+	}
 	viper.SetDefault("unix_socket_permission", "0o770")
 
 	viper.SetDefault("cli.timeout", "5s")

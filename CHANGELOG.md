@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 0.0.1-alpha.2 (2026-09-01) — multi-platform native (Windows/macOS/ARM, no Docker)
+
+Native Windows + macOS + ARM32/64 compatibility layer for the next alpha. Linux-only `0.0.1-alpha.1` remains the first CI artefacts; this `alpha.2` exposes all OS/arch except Docker (`kos` stays disabled until the native ports are proven).
+
+- **Windows**: named-pipe `\\.\pipe\stealthscale` via `Microsoft/go-winio` (`hscontrol/util/net_windows.go`, `hscontrol/app_windows.go`), per-OS config defaults (`%ProgramData%\stealthscale`, `%APPDATA%\stealthscale`), `AbsolutePathFromConfigPath` fixed with `filepath.IsAbs` (handles `C:/`, `C:\`, `\\?\C:\`, `\\server\share`), `packaging/windows/install.ps1` (`sc.exe` service, `HKCU\...\Run` for `--tray`), CLI `npipe:////./pipe/stealthscale` (`cmd/stealthscale/cli/utils.go`)
+- **macOS**: `launchd` `com.stealthscale.plist` (`packaging/launchd/com.stealthscale.plist`, `install.sh`), `/usr/local/etc/stealthscale` + `/Library/Application Support/stealthscale` + `~/Library/Application Support/stealthscale` config paths, `~/Library/Caches/stealthscale` TLS cache, `hscontrol/types/config.go` `runtime.GOOS` dispatch
+- **Portability**: `hscontrol/util/file.go` `filepath.IsAbs`/`Clean` + `file_test.go` table (covers `C:/`, `\\?\`, UNC, `/var/...`), `hscontrol/mapper/mapper.go` `path.Join` → `filepath.Join`, `hscontrol/app_unix.go` vs `app_windows.go` signal (`SIGHUP` reload on Unix only, `SIGINT`/`SIGTERM` on Windows) and `chmod` handling
+- **CLI/WebUI**: WebUI remains primary control plane (`http://127.0.0.1:8080/web`), `cmd/stealthscale/cli/root.go` update-check now includes `windows`
+- **Packaging**: `goreleaser` targets `darwin_amd64/arm64`, `windows_amd64/arm64`, `freebsd_amd64/arm64`, `linux_amd64/arm64/arm` plus explicit `linux_arm_6`/`linux_arm_7` (Pi Zero/2/3 32-bit) — see `.goreleaser.yml:26`; `nfpms` still `deb` only, `archives: binary` (tar.gz/zip via name_template)
+- **CI**: `.github/workflows/ci.yml` adds `cross-build` ( `GOOS=windows/darwin go vet`, cross-builds for `linux_arm`/`arm64`, `windows`/`darwin` `amd64`/`arm64`, `freebsd`, `goreleaser multi-platform` checks, `packaging/launchd`+`windows` presence)
+
+No Docker images in this channel — native binaries only. Next promotion will re-enable `kos` (`ghcr.io/tomiwebpro/stealthscale`) once the Windows/macOS native ports are stable. See `docs/about/versioning.md` — `alpha` is prerelease (`isDev=false`, writes `database_versions` as `0.0.1`).
+
 ## 0.0.1-alpha.1 (2026-08-31) — first StealthScale alpha (forked from Headscale, fresh versioning)
 
 Fresh start: StealthScale is not a small fork and is **not intended to be compatible with Tailscale/Headscale — no compatibility layer**. WireGuard is fully replaced by VLESS+Reality via `stscale` unified binary. Versioning restarts at `0.0.1`.

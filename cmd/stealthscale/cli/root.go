@@ -72,7 +72,7 @@ func initConfig() {
 	disableUpdateCheck := viper.GetBool("disable_check_updates")
 	if !disableUpdateCheck && !machineOutput {
 		versionInfo := types.GetVersionInfo()
-		if (runtime.GOOS == "linux" || runtime.GOOS == "darwin") &&
+		if (runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows") &&
 			!versionInfo.Dirty {
 			githubTag := &latest.GithubTag{
 				Owner:         "tomiwebpro",

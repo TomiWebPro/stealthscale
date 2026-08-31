@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.stealthscale</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/stscale</string>
+		<string>serve</string>
+		<string>--config</string>
+		<string>/usr/local/etc/stealthscale/config.yaml</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/Library/Logs/stealthscale/stealthscale.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Library/Logs/stealthscale/stealthscale.err.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>STEALTHSCALE_LOG_LEVEL</key>
+		<string>info</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/Library/Application Support/stealthscale</string>
+</dict>
+</plist>

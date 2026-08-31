@@ -17,6 +17,9 @@ builds:
   # Single unified binary: stscale is both coordinator and node.
   # There is no separate client binary — the same binary runs as client via `stscale up`
   # and as server via `stscale serve`. The VLESS+Reality transport is built in.
+  # Next alpha: all OS/arch except Docker (kos stays disabled until native ports proven).
+  # ARM 32-bit: linux_arm_6 (GOARM=6, Raspberry Pi Zero) and linux_arm_7 (GOARM=7, Pi 2/3/4 32-bit)
+  # plus linux_arm (generic) for compatibility; ARM 64-bit via linux_arm64/darwin_arm64/windows_arm64.
   - id: stealthscale
     main: ./cmd/stealthscale
     binary: stscale
@@ -24,13 +27,23 @@ builds:
     env:
       - CGO_ENABLED=0
     targets:
+      - darwin_amd64
+      - darwin_arm64
+      - freebsd_amd64
+      - freebsd_arm64
       - linux_amd64
       - linux_arm64
       - linux_arm
+      - linux_arm_6
+      - linux_arm_7
+      - windows_amd64
+      - windows_arm64
     flags:
       - -mod=readonly
 
-# archives: binary only for linux — no exe/dmg for windows/macos in alpha
+# Archives: binary for linux/freebsd; tar.gz/zip handled via binary naming
+# (goreleaser appends .exe for windows automatically). Windows/macOS native
+# without Docker — see packaging/launchd and packaging/windows.
 archives:
   - id: golang-cross
     name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}{{ with .Mips }}_{{ . }}{{ end }}{{ if not (eq .Amd64 "v1") }}{{ .Amd64 }}{{ end }}'

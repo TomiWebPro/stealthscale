@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -25,16 +24,22 @@ const (
 var ErrDirectoryPermission = errors.New("creating directory failed with permission error")
 
 func AbsolutePathFromConfigPath(path string) string {
-	// If a relative path is provided, prefix it with the directory where
-	// the config file was found.
-	if (path != "") && !strings.HasPrefix(path, string(os.PathSeparator)) {
-		dir, _ := filepath.Split(viper.ConfigFileUsed())
-		if dir != "" {
-			path = filepath.Join(dir, path)
-		}
+	if path == "" {
+		return path
 	}
-
-	return path
+	// filepath.IsAbs handles all OS-specific absolute forms:
+	// - Unix: /var/lib/...
+	// - Windows: C:\..., C:/..., \\server\share, \\?\C:\...
+	// - Clean normalises separators and dot segments.
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	// Relative path: resolve against the config file directory.
+	dir, _ := filepath.Split(viper.ConfigFileUsed())
+	if dir != "" {
+		path = filepath.Join(dir, path)
+	}
+	return filepath.Clean(path)
 }
 
 func GetFileMode(key string) fs.FileMode {
