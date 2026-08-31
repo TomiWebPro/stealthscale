@@ -1,9 +1,11 @@
 # StealthScale
 
-> A self-hosted, stealthy Tailscale-compatible **mesh** — one binary that is
-> both the client and the coordinator — using **VLESS + Reality (xtls/reality)
-> + uTLS** so all traffic is indistinguishable from ordinary TLS to a
-> network observer (the server steals the decoy site's real handshake).
+> A self-hosted, stealthy **mesh** — one binary that is both the client and
+> the coordinator — using **VLESS + Reality (xtls/reality) + uTLS** so all
+> traffic is indistinguishable from ordinary TLS to a network observer (the
+> server steals the decoy site's real handshake).
+>
+> **No Tailscale compatibility layer — StealthScale is not intended to be compatible with stock Tailscale clients, servers, or Headscale.** WireGuard is fully replaced by VLESS+Reality; there is no compatibility mode.
 
 StealthScale is a fork of [Headscale](https://github.com/juanfont/headscale)
 with a different end goal: **there is no "head" server and no special client.**
@@ -53,19 +55,14 @@ full architecture.
 
 ## Compatibility
 
-!!! warning
-
-    StealthScale is **not directly compatible** with stock Tailscale clients
-    or the original Headscale server, because WireGuard was replaced with
-    Xray/VLESS for data transmission.
+!!! danger "No Tailscale compatibility"
+    StealthScale has **no compatibility layer** and is **not intended to be compatible** with stock Tailscale clients, Tailscale control servers, or Headscale. WireGuard is fully replaced by Xray/VLESS+Reality; there is no fallback or translation mode. Do not attempt to connect stock `tailscale` binaries.
 
 You need:
 
-- **Server**: this repository (built as `stscale`). It exposes the Headscale
-  management API **and** the VLESS endpoints.
-- **Client**: a StealthScale-patched Tailscale client that dials VLESS
-  instead of WireGuard — see
-  [docs/client-modification.md](docs/client-modification.md).
+- **Server**: this repository (built as `stscale`). It exposes its own management API and VLESS endpoints — not the Headscale/Tailscale API surface.
+- **Client**: the unified `stscale` binary in `up` mode (`stscale up --vless-uri ...`) — see
+  [docs/stealthscale/clients.md](docs/stealthscale/clients.md). A separate patched Tailscale client is not supported.
 
 ## Quick start
 

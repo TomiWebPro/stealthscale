@@ -1,6 +1,11 @@
 # CHANGELOG
 
-## 0.30.0 (202x-xx-xx)
+## 0.0.1-alpha.1 (2026-08-31) — first StealthScale alpha (forked from Headscale, fresh versioning)
+
+Fresh start: StealthScale is not a small fork and is **not intended to be compatible with Tailscale/Headscale — no compatibility layer**. WireGuard is fully replaced by VLESS+Reality via `stscale` unified binary. Versioning restarts at `0.0.1`.
+See `docs/about/versioning.md` for channel convention.
+
+## 0.30.0 (202x-xx-xx) — Headscale upstream (archived)
 
 **Minimum supported Tailscale client version: v1.xx.0**
 

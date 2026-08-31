@@ -1,8 +1,8 @@
 # StealthScale overview
 
-StealthScale is a self-hosted, stealthy Tailscale-compatible **mesh network**.
+StealthScale is a self-hosted, stealthy **mesh network**.
 It is a fork of [Headscale](https://github.com/juanfont/headscale), but with a
-different end goal, captured in [Project goals](#project-goals) below. In short:
+different end goal, captured in [Project goals](#project-goals) below, and **is not intended to be compatible with Tailscale or Headscale — there is no compatibility layer**. WireGuard is fully replaced by VLESS+Reality. In short:
 **there is no "head" server and no special client.** Every device runs the same
 binary, becomes a *node* in the network, and coordinates with its peers. An
 always-on coordinate server is encouraged for reliability, but **any node can
