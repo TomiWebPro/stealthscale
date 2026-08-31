@@ -21,6 +21,7 @@ require (
 	github.com/go-json-experiment/json v0.0.0-20260601182631-00ed12fed2a6
 	github.com/gofrs/uuid/v5 v5.4.0
 	github.com/google/go-cmp v0.7.0
+	github.com/google/uuid v1.6.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jagottsicher/termcolor v1.0.2
 	github.com/oapi-codegen/runtime v1.4.1
@@ -32,6 +33,7 @@ require (
 	github.com/pterm/pterm v0.12.83
 	github.com/puzpuzpuz/xsync/v4 v4.5.0
 	github.com/realclientip/realclientip-go v1.0.0
+	github.com/refraction-networking/utls v1.8.2
 	github.com/rs/zerolog v1.35.1
 	github.com/samber/lo v1.53.0
 	github.com/sasha-s/go-deadlock v0.3.9
@@ -42,6 +44,7 @@ require (
 	github.com/tailscale/squibble v0.0.0-20260411062017-141f5d618bc4
 	github.com/tailscale/tailsql v0.0.0-20260522170732-77aec5aabc76
 	github.com/tcnksm/go-latest v0.0.0-20170313132115-e3007ae9052e
+	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
 	golang.org/x/crypto v0.53.0
 	golang.org/x/exp v0.0.0-20260603202125-055de637280b
@@ -160,7 +163,6 @@ require (
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/pprof v0.0.0-20260604005048-7023385849c0 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gookit/color v1.6.1 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
@@ -208,7 +210,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
-	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/safchain/ethtool v0.7.0 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
@@ -230,7 +231,6 @@ require (
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
 	github.com/xeipuuv/gojsonschema v1.2.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
