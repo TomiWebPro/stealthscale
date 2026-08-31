@@ -24,6 +24,8 @@ vendor/
 
 dist/
 /stealthscale
+/stscale
+stscale
 config.yaml
 config*.yaml
 !config-example.yaml
