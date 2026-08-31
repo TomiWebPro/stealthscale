@@ -25,7 +25,8 @@ jobs:
       - name: Check deb packaging
         run: |
           cat packaging/systemd/stealthscale.service | grep -q "StateDirectory=stealthscale" || (echo "StateDirectory mismatch" && exit 1)
-          cat .goreleaser.yml | grep -q "freebsd_arm64" || (echo "goreleaser missing freebsd_arm64" && exit 1)
+          cat .goreleaser.yml | grep -q "linux_amd64" || (echo "goreleaser missing linux_amd64" && exit 1)
+          cat .goreleaser.yml | grep -q "nfpms" || (echo "goreleaser missing nfpms deb" && exit 1)
           echo "packaging checks ok"
       - name: Check versioning convention
         run: |
