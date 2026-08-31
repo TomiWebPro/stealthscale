@@ -987,7 +987,11 @@ func (s *NodeStore) RebuildPeerMaps() {
 		rebuildResult: result,
 	}
 
-	s.writeQueue <- w
+	select {
+	case s.writeQueue <- w:
+	case <-s.stopped:
+		return
+	}
 
 	<-result
 }
