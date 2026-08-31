@@ -102,7 +102,6 @@ kos:
   - id: ghcr
     repositories:
       - ghcr.io/tomiwebpro/stealthscale
-      - stealthscale/stealthscale
 
     # bare tells KO to only use the repository
     # for tagging and naming the container.
@@ -133,7 +132,6 @@ kos:
   - id: ghcr-debug
     repositories:
       - ghcr.io/tomiwebpro/stealthscale
-      - stealthscale/stealthscale
 
     bare: true
     base_image: gcr.io/distroless/base-debian13:debug

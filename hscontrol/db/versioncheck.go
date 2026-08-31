@@ -168,6 +168,14 @@ func isDev(version string) bool {
 		return true
 	}
 
+	if strings.Contains(version, "dirty") ||
+		strings.Contains(version, "-next") ||
+		strings.Contains(version, "nightly") ||
+		strings.Contains(version, ".nightly") ||
+		strings.Contains(version, "-g") {
+		return true
+	}
+
 	_, ok := pseudoVersionTime(version)
 
 	return ok

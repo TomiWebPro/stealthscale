@@ -4,15 +4,15 @@ Description=Network coordination service
 
 [Service]
 Type=simple
-User=coordination
-Group=coordination
+User=stealthscale
+Group=stealthscale
 ExecStart=/usr/bin/stscale serve
 ExecReload=/usr/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
 
-WorkingDirectory=/var/lib/coordination
-ReadWritePaths=/var/lib/coordination
+WorkingDirectory=/var/lib/stealthscale
+ReadWritePaths=/var/lib/stealthscale
 
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
@@ -38,9 +38,9 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
-RuntimeDirectory=coordination
+RuntimeDirectory=stealthscale
 RuntimeDirectoryMode=0750
-StateDirectory=coordination
+StateDirectory=stealthscale
 StateDirectoryMode=0750
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
