@@ -142,7 +142,22 @@ type goldenRecord struct {
 func goldenPath(t *testing.T) string {
 	t.Helper()
 
-	name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
+	// Windows forbids < > : " | ? * \ in filenames; "->" in a parity name
+	// previously produced an invalid path (">") that broke `git checkout` on
+	// windows-latest (path-tests-windows). Sanitize all NTFS-forbidden
+	// characters so goldens are portable across GOOS.
+	name := strings.NewReplacer(
+		"/", "_",
+		" ", "_",
+		"<", "_",
+		">", "_",
+		":", "_",
+		"\"", "_",
+		"|", "_",
+		"?", "_",
+		"*", "_",
+		"\\", "_",
+	).Replace(t.Name())
 
 	return filepath.Join(goldenDir, name+".json")
 }
