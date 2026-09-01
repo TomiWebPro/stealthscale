@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -150,14 +152,55 @@ func (h *StealthScale) handleVerifyRequest(
 	return json.NewEncoder(writer).Encode(resp)
 }
 
+// verifyRateLimiter limits brute-force probing of /verify. The endpoint
+// previously allowed unauthenticated enumeration of node public keys (oracle).
+var (
+	verifyRateMu    sync.Mutex
+	verifyRateSeen  = map[string]struct {
+		count int
+		reset time.Time
+	}{}
+	verifyRateLimit = 10 // requests per minute per IP
+	verifyRateWindow = time.Minute
+)
+
+func isVerifyRateLimited(ip string) bool {
+	verifyRateMu.Lock()
+	defer verifyRateMu.Unlock()
+	now := time.Now()
+	e, ok := verifyRateSeen[ip]
+	if !ok || now.After(e.reset) {
+		verifyRateSeen[ip] = struct {
+			count int
+			reset time.Time
+		}{count: 1, reset: now.Add(verifyRateWindow)}
+		return false
+	}
+	e.count++
+	verifyRateSeen[ip] = e
+	return e.count > verifyRateLimit
+}
+
 // VerifyHandler see https://github.com/tailscale/tailscale/blob/964282d34f06ecc06ce644769c66b0b31d118340/derp/derp_server.go#L1159
 // DERP use verifyClientsURL to verify whether a client is allowed to connect to the DERP server.
+// This public endpoint is now rate-limited and does not serve as an oracle
+// for unauthenticated callers — internal DERP verification uses the custom
+// DerpVerifyScheme transport that bypasses this handler entirely.
 func (h *StealthScale) VerifyHandler(
 	writer http.ResponseWriter,
 	req *http.Request,
 ) {
 	if req.Method != http.MethodPost {
 		httpError(writer, errMethodNotAllowed)
+		return
+	}
+	// Rate-limit per IP to mitigate brute-force oracle.
+	host, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err != nil {
+		host = req.RemoteAddr
+	}
+	if isVerifyRateLimited(host) {
+		http.Error(writer, "too many requests", http.StatusTooManyRequests)
 		return
 	}
 
@@ -170,7 +213,7 @@ func (h *StealthScale) VerifyHandler(
 	// responses remain text/plain.
 	writer.Header().Set("Content-Type", "application/json")
 
-	err := h.handleVerifyRequest(req, writer)
+	err = h.handleVerifyRequest(req, writer)
 	if err != nil {
 		httpError(writer, err)
 		return

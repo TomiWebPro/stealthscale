@@ -5,6 +5,7 @@ package capver
 import (
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"tailscale.com/tailcfg"
@@ -50,7 +51,33 @@ func CapabilityVersion(ver string) tailcfg.CapabilityVersion {
 	parts := strings.Split(strings.TrimPrefix(ver, "v"), ".")
 	if len(parts) >= minVersionParts {
 		minor := "v" + parts[0] + "." + parts[1]
-		return tailscaleToCapVer[minor]
+		if cv, ok := tailscaleToCapVer[minor]; ok {
+			return cv
+		}
+		// Unknown newer minor (e.g. v1.102 when map only has up to v1.101) — return
+		// current capability to avoid false isSupportedVersion(0) rejection.
+		if len(parts) >= 2 {
+			if major, err1 := strconv.Atoi(parts[0]); err1 == nil {
+				if minorN, err2 := strconv.Atoi(parts[1]); err2 == nil {
+					// Compare against latest known minor
+					latest := tailscaleVersSorted()
+					if len(latest) > 0 {
+						latestMinor := latest[len(latest)-1]
+						lp := strings.Split(strings.TrimPrefix(latestMinor, "v"), ".")
+						if len(lp) >= 2 {
+							if lmajor, err3 := strconv.Atoi(lp[0]); err3 == nil {
+								if lminor, err4 := strconv.Atoi(lp[1]); err4 == nil {
+									if major > lmajor || (major == lmajor && minorN > lminor) {
+										return tailcfg.CurrentCapabilityVersion
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		return 0
 	}
 
 	return 0

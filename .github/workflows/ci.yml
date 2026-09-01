@@ -17,9 +17,13 @@ jobs:
       - name: Build
         run: make build
       - name: Test (short, race)
-        run: go test -race -short ./hscontrol/... 2>&1 | tail -50
+        run: |
+          set -o pipefail
+          go test -race -short -count=1 ./hscontrol/... ./cmd/... -v
       - name: Test stealth
-        run: go test -v ./hscontrol/stealth ./hscontrol/xray ./hscontrol/derp 2>&1 | tail -30
+        run: |
+          set -o pipefail
+          go test -race -short -count=1 -v ./hscontrol/stealth ./hscontrol/xray ./hscontrol/derp
       - name: Vet
         run: go vet ./...
       - name: Check deb packaging
@@ -27,6 +31,8 @@ jobs:
           cat packaging/systemd/stealthscale.service | grep -q "StateDirectory=stealthscale" || (echo "StateDirectory mismatch" && exit 1)
           cat .goreleaser.yml | grep -q "linux_amd64" || (echo "goreleaser missing linux_amd64" && exit 1)
           cat .goreleaser.yml | grep -q "nfpms" || (echo "goreleaser missing nfpms deb" && exit 1)
+          test -x packaging/deb/postinst || (echo "postinst not executable" && exit 1)
+          test -f config-example.yaml || (echo "config-example.yaml missing" && exit 1)
           echo "packaging checks ok"
       - name: Check versioning convention
         run: |
@@ -42,9 +48,17 @@ jobs:
         with:
           go-version: '1.26.5'
       - name: Cross-vet Windows
-        run: GOOS=windows go vet ./hscontrol/util ./hscontrol/types ./cmd/stealthscale/... 2>&1 | tail -20
+        run: |
+          set -o pipefail
+          GOOS=windows go vet ./hscontrol/... ./cmd/... 2>&1
       - name: Cross-vet Darwin
-        run: GOOS=darwin go vet ./hscontrol/util ./hscontrol/types ./cmd/stealthscale/... 2>&1 | tail -20
+        run: |
+          set -o pipefail
+          GOOS=darwin go vet ./hscontrol/... ./cmd/... 2>&1
+      - name: Cross-vet FreeBSD
+        run: |
+          set -o pipefail
+          GOOS=freebsd go vet ./hscontrol/... ./cmd/... 2>&1
       - name: Cross-build Windows amd64
         run: GOOS=windows GOARCH=amd64 go build -o /tmp/stscale-windows-amd64 ./cmd/stealthscale && echo "windows amd64 ok" && rm /tmp/stscale-windows-amd64
       - name: Cross-build Windows arm64
@@ -53,25 +67,59 @@ jobs:
         run: GOOS=darwin GOARCH=amd64 go build -o /tmp/stscale-darwin-amd64 ./cmd/stealthscale && echo "darwin amd64 ok" && rm /tmp/stscale-darwin-amd64
       - name: Cross-build Darwin arm64
         run: GOOS=darwin GOARCH=arm64 go build -o /tmp/stscale-darwin-arm64 ./cmd/stealthscale && echo "darwin arm64 ok" && rm /tmp/stscale-darwin-arm64
-      - name: Cross-build Linux arm (32-bit)
+      - name: Cross-build Linux arm (32-bit) GOARM7
         run: GOOS=linux GOARCH=arm GOARM=7 go build -o /tmp/stscale-linux-arm7 ./cmd/stealthscale && echo "linux arm7 ok" && rm /tmp/stscale-linux-arm7
+      - name: Cross-build Linux arm GOARM6 (Pi Zero)
+        run: GOOS=linux GOARCH=arm GOARM=6 go build -o /tmp/stscale-linux-arm6 ./cmd/stealthscale && echo "linux arm6 ok" && rm /tmp/stscale-linux-arm6
+      - name: Cross-build Linux arm generic
+        run: GOOS=linux GOARCH=arm go build -o /tmp/stscale-linux-arm ./cmd/stealthscale && echo "linux arm generic ok" && rm /tmp/stscale-linux-arm
       - name: Cross-build Linux arm64
         run: GOOS=linux GOARCH=arm64 go build -o /tmp/stscale-linux-arm64 ./cmd/stealthscale && echo "linux arm64 ok" && rm /tmp/stscale-linux-arm64
+      - name: Cross-build FreeBSD amd64
+        run: GOOS=freebsd GOARCH=amd64 go build -o /tmp/stscale-freebsd-amd64 ./cmd/stealthscale && echo "freebsd amd64 ok" && rm /tmp/stscale-freebsd-amd64
+      - name: Cross-build FreeBSD arm64
+        run: GOOS=freebsd GOARCH=arm64 go build -o /tmp/stscale-freebsd-arm64 ./cmd/stealthscale && echo "freebsd arm64 ok" && rm /tmp/stscale-freebsd-arm64
       - name: Check goreleaser multi-platform
         run: |
-          for target in linux_amd64 linux_arm64 linux_arm darwin_amd64 darwin_arm64 windows_amd64 windows_arm64 freebsd_amd64 freebsd_arm64; do
-            cat .goreleaser.yml | grep -q "$target" || (echo "goreleaser missing $target" && exit 1)
+          set -o pipefail
+          for target in "linux_amd64" "linux_arm64" "linux_arm_6" "linux_arm_7" "linux_arm" "darwin_amd64" "darwin_arm64" "windows_amd64" "windows_arm64" "freebsd_amd64" "freebsd_arm64"; do
+            grep -q -- "- $target" .goreleaser.yml || grep -q -- "\"$target\"" .goreleaser.yml || grep -q "$target" .goreleaser.yml || (echo "goreleaser missing $target" && exit 1)
           done
           cat .goreleaser.yml | grep -q "nfpms" || (echo "goreleaser missing nfpms deb" && exit 1)
           test -f packaging/launchd/com.stealthscale.plist || (echo "launchd plist missing" && exit 1)
           test -f packaging/windows/install.ps1 || (echo "windows install.ps1 missing" && exit 1)
           echo "goreleaser multi-platform checks ok"
       - name: Path handling tests
-        run: go test -run TestAbsolutePathFromConfigPath ./hscontrol/util -count=1 -v 2>&1 | tail -30
+        run: |
+          set -o pipefail
+          go test -run TestAbsolutePathFromConfigPath ./hscontrol/util -count=1 -v
 
   goreleaser-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: go vet ./hscontrol/db -run TestVersionCheck 2>&1 | head -20
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - name: VersionCheck test
+        run: go test -run TestCheckVersionUpgradePath -count=1 ./hscontrol/db -v
 
+  path-tests-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - name: Windows path tests
+        run: go test -run TestAbsolutePathFromConfigPath ./hscontrol/util -count=1 -v
+
+  path-tests-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - name: macOS path tests
+        run: go test -run TestAbsolutePathFromConfigPath ./hscontrol/util -count=1 -v

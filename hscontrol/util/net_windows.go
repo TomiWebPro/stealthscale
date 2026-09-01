@@ -20,9 +20,11 @@ func SocketDialer(ctx context.Context, addr string) (net.Conn, error) {
 }
 
 // IsNamedPipe reports whether addr is a Windows named-pipe address.
+// Narrow to pipe prefixes only (\\.\pipe\ and npipe://), not generic UNC
+// (\\server\share) or extended paths (\\?\C:\). See gap-multios issue.
 func IsNamedPipe(addr string) bool {
 	return strings.HasPrefix(addr, `\\.\pipe\`) ||
-		strings.HasPrefix(addr, `\\`) ||
+		strings.HasPrefix(addr, `\\?\pipe\`) ||
 		strings.HasPrefix(addr, "npipe://")
 }
 

@@ -126,63 +126,48 @@ func DialVLESS(ctx context.Context, cfg *VLESSConfig) (net.Conn, error) {
 		conn = uconn
 	case "reality_xtls":
 		// True Reality: utls + Reality auth (shortId + public key) via vendored client.
-		// If PublicKey is missing (e.g. legacy URI or test without keys), fall
-		// back to plain utls so handshake still succeeds (no server verification).
-		if cfg.PublicKey != "" {
-			pubBytes, err := hex.DecodeString(cfg.PublicKey)
-			if err != nil || len(pubBytes) != 32 {
-				conn.Close()
-				return nil, fmt.Errorf("reality_xtls: invalid public key %q: %w", cfg.PublicKey, err)
-			}
-			var shortIdBytes []byte
-			if cfg.ShortID != "" {
-				b, err := hex.DecodeString(cfg.ShortID)
-				if err != nil {
-					conn.Close()
-					return nil, fmt.Errorf("reality_xtls: invalid shortId %q: %w", cfg.ShortID, err)
-				}
-				shortIdBytes = b
-			}
-			rcfg := &RealityClientConfig{
-				Show:        false,
-				Fingerprint: cfg.FP,
-				ServerName:  sni,
-				PublicKey:   pubBytes,
-				ShortId:     shortIdBytes,
-				SpiderX:     cfg.SpiderX,
-			}
-			if rcfg.SpiderX == "" {
-				rcfg.SpiderX = "/"
-			}
-			if rcfg.Fingerprint == "" {
-				rcfg.Fingerprint = "chrome"
-			}
-			_ = conn.SetDeadline(time.Now().Add(timeout))
-			rConn, err := RealityUClient(conn, rcfg, ctx)
+		// Fail-closed when PublicKey is missing — plain utls with InsecureSkipVerify
+		// and no HMAC check would leak UUID to a MITM with any cert for SNI.
+		if cfg.PublicKey == "" {
+			conn.Close()
+			return nil, fmt.Errorf("reality_xtls requires pbk (public key) — refusing to downgrade to plain uTLS (would leak UUID to MITM); got empty PublicKey for %s", addr)
+		}
+		pubBytes, err := hex.DecodeString(cfg.PublicKey)
+		if err != nil || len(pubBytes) != 32 {
+			conn.Close()
+			return nil, fmt.Errorf("reality_xtls: invalid public key %q: %w", cfg.PublicKey, err)
+		}
+		var shortIdBytes []byte
+		if cfg.ShortID != "" {
+			b, err := hex.DecodeString(cfg.ShortID)
 			if err != nil {
 				conn.Close()
-				return nil, fmt.Errorf("reality_xtls handshake for VLESS %s: %w", addr, err)
+				return nil, fmt.Errorf("reality_xtls: invalid shortId %q: %w", cfg.ShortID, err)
 			}
-			_ = rConn.SetDeadline(time.Time{})
-			conn = rConn
-		} else {
-			// Fallback: reality without keys — use plain utls (decoy cert style).
-			uconf := &utls.Config{
-				ServerName:         sni,
-				InsecureSkipVerify: true,
-				MinVersion:         tls.VersionTLS12,
-				NextProtos:         []string{"h2", "http/1.1"},
-			}
-			helloID := fpToClientHelloID(cfg.FP)
-			uconn := utls.UClient(conn, uconf, helloID)
-			_ = uconn.SetDeadline(time.Now().Add(timeout))
-			if err := uconn.HandshakeContext(ctx); err != nil {
-				conn.Close()
-				return nil, fmt.Errorf("%s handshake for VLESS %s: %w", sec, addr, err)
-			}
-			_ = uconn.SetDeadline(time.Time{})
-			conn = uconn
+			shortIdBytes = b
 		}
+		rcfg := &RealityClientConfig{
+			Show:        false,
+			Fingerprint: cfg.FP,
+			ServerName:  sni,
+			PublicKey:   pubBytes,
+			ShortId:     shortIdBytes,
+			SpiderX:     cfg.SpiderX,
+		}
+		if rcfg.SpiderX == "" {
+			rcfg.SpiderX = "/"
+		}
+		if rcfg.Fingerprint == "" {
+			rcfg.Fingerprint = "chrome"
+		}
+		_ = conn.SetDeadline(time.Now().Add(timeout))
+		rConn, err := RealityUClient(conn, rcfg, ctx)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("reality_xtls handshake for VLESS %s: %w", addr, err)
+		}
+		_ = rConn.SetDeadline(time.Time{})
+		conn = rConn
 	case "none":
 		// plain TCP, no TLS
 	default:

@@ -29,10 +29,10 @@ The ports vary with scenario. Don't change them without also updating `xray.list
 
 Docs and examples assume:
 
-- StealthScale runs as a system service via a dedicated local user. Debian package default is `stealthscale` (check `/usr/share/doc/stealthscale/`), `nix` example uses `stealthscale`, systemd unit at `packaging/systemd/stealthscale.service` ships `ExecStart=/usr/bin/stealthscale serve` with `User=coordination` in the current packaging — adjust to your setup and keep the user consistent with `ReadWritePaths`/`WorkingDirectory`.
+- StealthScale runs as a system service via a dedicated local user. Debian package default is `stealthscale` (check `/usr/share/doc/stealthscale/`), `nix` example uses `stealthscale`, systemd unit at `packaging/systemd/stealthscale.service` ships `ExecStart=/usr/bin/stealthscale serve` with `User=stealthscale` in the current packaging — adjust to your setup and keep the user consistent with `ReadWritePaths`/`WorkingDirectory`.
 - Config loaded from `/etc/stealthscale/config.yaml` (also `$HOME/.stealthscale` or CWD; override with `-c`/`--config` or `STSCALE_CONFIG`).
-- SQLite as database (`/var/lib/stealthscale/db.sqlite` plus sibling `.xray_secret` for VLESS identity). For `postgres`, `xray.secret` must be set explicitly (`openssl rand -hex 32`).
-- Data directory `/var/lib/stealthscale` (or `/var/lib/coordination` for the current deb). URLs/placeholders use `stscale.example.com` or `ctl.example.com`.
+- SQLite as database (`/var/lib/stealthscale (Linux) / %ProgramData%\stealthscale (Windows) / /Library/Application Support/stealthscale (macOS)/db.sqlite` plus sibling `.xray_secret` for VLESS identity). For `postgres`, `xray.secret` must be set explicitly (`openssl rand -hex 32`).
+- Data directory `/var/lib/stealthscale` (or `/var/lib/stealthscale (historical `/var/lib/coordination` pre-0.0.1)` for the current deb). URLs/placeholders use `stscale.example.com` or `ctl.example.com`.
 
 [^1]: Tailscale assumes HTTPS on `443` in certain situations. HTTP or non-443 HTTPS is possible but `443` is strongly recommended for production.
 

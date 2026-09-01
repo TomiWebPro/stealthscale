@@ -2,6 +2,7 @@ package main
 
 import (
 	"io/fs"
+	"runtime"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,10 +38,17 @@ func TestConfigFileLoading(t *testing.T) {
 	assert.Equal(t, "127.0.0.1:8080", viper.GetString("listen_addr"))
 	assert.Equal(t, "127.0.0.1:9090", viper.GetString("metrics_listen_addr"))
 	assert.Equal(t, "sqlite", viper.GetString("database.type"))
-	assert.Equal(t, "/var/lib/stealthscale/db.sqlite", viper.GetString("database.sqlite.path"))
+	if runtime.GOOS == "windows" {
+		assert.Contains(t, viper.GetString("database.sqlite.path"), "stealthscale")
+		assert.Contains(t, viper.GetString("database.sqlite.path"), "db.sqlite")
+	} else {
+		assert.Equal(t, "/var/lib/stealthscale/db.sqlite", viper.GetString("database.sqlite.path"))
+	}
 	assert.Empty(t, viper.GetString("tls_letsencrypt_hostname"))
 	assert.Equal(t, ":http", viper.GetString("tls_letsencrypt_listen"))
 	assert.Equal(t, "HTTP-01", viper.GetString("tls_letsencrypt_challenge_type"))
+	// config-example.yaml sets 0770; GetFileMode must parse it correctly.
+	// Default without config is 0700, but with example it is 0770.
 	assert.Equal(t, fs.FileMode(0o770), util.GetFileMode("unix_socket_permission"))
 	assert.False(t, viper.GetBool("logtail.enabled"))
 }
@@ -67,7 +75,12 @@ func TestConfigLoading(t *testing.T) {
 	assert.Equal(t, "127.0.0.1:8080", viper.GetString("listen_addr"))
 	assert.Equal(t, "127.0.0.1:9090", viper.GetString("metrics_listen_addr"))
 	assert.Equal(t, "sqlite", viper.GetString("database.type"))
-	assert.Equal(t, "/var/lib/stealthscale/db.sqlite", viper.GetString("database.sqlite.path"))
+	if runtime.GOOS == "windows" {
+		assert.Contains(t, viper.GetString("database.sqlite.path"), "stealthscale")
+		assert.Contains(t, viper.GetString("database.sqlite.path"), "db.sqlite")
+	} else {
+		assert.Equal(t, "/var/lib/stealthscale/db.sqlite", viper.GetString("database.sqlite.path"))
+	}
 	assert.Empty(t, viper.GetString("tls_letsencrypt_hostname"))
 	assert.Equal(t, ":http", viper.GetString("tls_letsencrypt_listen"))
 	assert.Equal(t, "HTTP-01", viper.GetString("tls_letsencrypt_challenge_type"))

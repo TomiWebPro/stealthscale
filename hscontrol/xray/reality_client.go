@@ -71,8 +71,50 @@ type realityUConn struct {
 // It checks the server's temporary ed25519 cert signature == HMAC-SHA512(pub, authKey).
 // When Show is false, no debug prints. On success sets verified=true.
 func (c *realityUConn) VerifyPeerCertificate(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-	p, _ := reflect.TypeOf(c.Conn).Elem().FieldByName("peerCertificates")
-	certs := *(*([]*x509.Certificate))(unsafe.Pointer(uintptr(unsafe.Pointer(c.Conn)) + p.Offset))
+	if c == nil || c.UConn == nil {
+		return fmt.Errorf("reality: nil Conn")
+	}
+	// Prefer exported ConnectionState to avoid unsafe. This is safe across
+	// utls/crypto/tls version bumps and avoids reading wrong memory if
+	// peerCertificates field is renamed or layout changes.
+	if cs := c.ConnectionState(); len(cs.PeerCertificates) > 0 {
+		certs := cs.PeerCertificates
+		if pub, ok := certs[0].PublicKey.(ed25519.PublicKey); ok && len(c.authKey) > 0 {
+			h := hmac.New(sha512.New, c.authKey)
+			h.Write(pub)
+			if bytes.Equal(h.Sum(nil), certs[0].Signature) {
+				c.verified = true
+				return nil
+			}
+		}
+		opts := x509.VerifyOptions{DNSName: c.serverName, Intermediates: x509.NewCertPool()}
+		for _, cert := range certs[1:] {
+			opts.Intermediates.AddCert(cert)
+		}
+		if _, err := certs[0].Verify(opts); err != nil {
+			return err
+		}
+		return nil
+	}
+	// Fallback legacy reflection path — only if ConnectionState is empty
+	// (handshake not yet populated). Check ok to avoid panic/info-leak on
+	// field rename and avoid silently reading wrong offset.
+	t := reflect.TypeOf(c.Conn)
+	if t == nil {
+		return fmt.Errorf("reality: nil Conn")
+	}
+	if t.Kind() != reflect.Ptr {
+		return fmt.Errorf("reality: unexpected Conn type %T", c.Conn)
+	}
+	elem := t.Elem()
+	if elem.Kind() != reflect.Struct {
+		return fmt.Errorf("reality: unexpected Conn elem %v", elem.Kind())
+	}
+	field, ok := elem.FieldByName("peerCertificates")
+	if !ok {
+		return fmt.Errorf("reality: peerCertificates field not found (utls/crypto/tls layout changed)")
+	}
+	certs := *(*([]*x509.Certificate))(unsafe.Pointer(uintptr(unsafe.Pointer(c.Conn)) + field.Offset))
 	if len(certs) == 0 {
 		return fmt.Errorf("reality: no peer certificates")
 	}

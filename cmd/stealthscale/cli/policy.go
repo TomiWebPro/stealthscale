@@ -65,8 +65,9 @@ func init() {
 }
 
 var policyCmd = &cobra.Command{
-	Use:   "policy",
-	Short: "Manage the StealthScale ACL Policy",
+	Use:     "policy",
+	Aliases: []string{"acl"},
+	Short:   "Manage the StealthScale ACL Policy",
 }
 
 var getPolicy = &cobra.Command{

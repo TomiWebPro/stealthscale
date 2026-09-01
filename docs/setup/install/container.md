@@ -6,6 +6,9 @@
 
 A container runtime (Docker/Podman) is required. Images are at:
 
+!!! warning "Alpha: no Docker images yet — `kos` disabled in `.goreleaser.yml:110` until native Windows+macOS ready; use `make build` or `goreleaser build --snapshot`"
+
+
 - Docker Hub: `docker.io/stealthscale/stealthscale:<VERSION>` (legacy name)
 - GitHub Container Registry (canonical): `ghcr.io/tomiwebpro/stealthscale:<VERSION>` — use this.
 

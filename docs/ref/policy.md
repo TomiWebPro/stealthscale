@@ -67,9 +67,15 @@ ______________________________________________________________________
 ## Limitations
 
 - [Device postures](https://tailscale.com/docs/features/device-posture) and the related sections such as `postures` or
-  `srcPosture` aren't supported.
+  `srcPosture` aren't supported (see `hscontrol/policy/v2/types.go:2711` posture tracking).
 - [IP sets](https://tailscale.com/docs/features/tailnet-policy-file/ip-sets) aren't supported.
-- A subset of [Autogroups](#autogroups) are available.
+- A subset of [Autogroups](#autogroups) are available. Missing: `autogroup:admin` and `autogroup:owner` (SaaS supports them; StealthScale returns `invalid autogroup` with tracking issue reference — see `feature-autogroups-admin-owner`). Workaround: use `group:admin` and migrate owner-gated grants manually.
+- [Funnel / Serve](https://tailscale.com/docs/features/funnel) (`ServeConfig`, `NodeAttrFunnel`) not supported — `hscontrol/policy/v2/types.go:102` rejects `funnel` (`issues/2527`). See `feature-funnel-serve`.
+- `nodeAttrs` `ipPool` allocator not implemented — `hscontrol/policy/v2/types.go:2718` returns `ErrNodeAttrIPPoolUnsupported` (`issues/2912`). Use `prefixes.v4/.v6` allocation instead (`feature-ippool-allocator`).
+- Network flow logs (`tailcfg.NetworkFlowLog`) not implemented — see `feature-network-flow-logs`.
+- OIDC groups in policy (`allowedGroups` filter only) — cannot be used in `src`/`dst`; see `feature-oidc-groups-in-policy`.
+- IP sets, device posture, and policy posture not supported — see `feature-policy-posture-ipsets`.
+- CLI alias `acl` now mirrors `policy` (`stscale acl get` works for Headscale migration — `feature-cli-parity-gaps`).
 
 ## Autogroups
 

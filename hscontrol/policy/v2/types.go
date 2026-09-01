@@ -744,7 +744,10 @@ func (ag *AutoGroup) Validate() error {
 	if slices.Contains(autogroups, *ag) {
 		return nil
 	}
-
+	// Provide actionable hint for known unsupported autogroups
+	if *ag == "autogroup:admin" || *ag == "autogroup:owner" {
+		return fmt.Errorf("%w: got %q, must be one of %v — autogroup:admin/owner not yet supported (no user-role model; see feature-autogroups-admin-owner, SaaS only)", ErrInvalidAutogroup, *ag, autogroups)
+	}
 	return fmt.Errorf("%w: got %q, must be one of %v", ErrInvalidAutogroup, *ag, autogroups)
 }
 

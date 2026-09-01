@@ -250,6 +250,21 @@ func checkVersionUpgradePath(db *gorm.DB) error {
 		)
 	}
 
+	// Fresh-start: StealthScale 0.0.x is not compatible with Headscale 0.26-0.29 DB.
+	// Detect stored 0.29+ -> current 0.0.x and give actionable fresh-DB message
+	// instead of generic downgrade. See docs/about/versioning.md and upgrade.md
+	// (StealthScale 0.0.1 fresh DB only, Headscale requires export/import).
+	if stored.Major == 0 && stored.Minor >= 26 && current.Major == 0 && current.Minor == 0 {
+		return fmt.Errorf(
+			"stealthscale version %s cannot be used with a database last used by %s (Headscale %s): "+
+				"StealthScale 0.0.x is a fresh start and not compatible with Headscale DBs — "+
+				"create a fresh database or export/import via CLI (see docs/about/versioning.md and docs/setup/upgrade.md); "+
+				"also ensure xray.secret / .xray_secret is backed up: %w",
+			currentVersion, storedVersion, storedVersion,
+			errVersionDowngrade,
+		)
+	}
+
 	minorDiff := current.Minor - stored.Minor
 
 	switch {

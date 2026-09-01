@@ -118,7 +118,7 @@ extra:
     - icon: fontawesome/brands/discord
       link: https://discord.gg/c84AZQhmpx
   stealthscale:
-    version: 0.29.3
+    version: 0.0.1
 
 # Extensions
 markdown_extensions:
@@ -175,6 +175,7 @@ nav:
       - Releases: about/releases.md
       - Contributing: about/contributing.md
       - Sponsor: about/sponsor.md
+      - Versioning: about/versioning.md
 
   - Setup:
       - Requirements and Assumptions: setup/requirements.md
@@ -198,6 +199,7 @@ nav:
       - DNS: ref/dns.md
       - DERP: ref/derp.md
       - API: ref/api.md
+      - Threat model: ref/threat-model.md
       - Tags: ref/tags.md
       - Debug: ref/debug.md
       - Integration:

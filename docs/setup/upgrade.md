@@ -1,9 +1,10 @@
 # Upgrade an existing StealthScale installation
 
-!!! tip "Required update path"
+!!! tip "Required update path (fresh start at `0.0.1`)"
 
-    It's required to update from one stable version to the next (e.g. 0.26.0 → 0.27.1 → 0.28.0) without skipping minor
-    versions in between. You should always pick the latest available patch release.
+    StealthScale `0.0.1` is a fresh start and **not compatible** with Headscale DBs (`0.26`–`0.29`). Do **not** reuse a Headscale `db.sqlite` — `hscontrol/db/versioncheck.go` will block `stored 0.29.x → current 0.0.1` as a downgrade. Export/import via CLI (`stscale nodes list` → re-create) is required for Headscale migration. See `docs/about/versioning.md` as source of truth.
+
+    For StealthScale itself, update one minor at a time (e.g. `0.0.1-alpha.1` → `alpha.2` → `0.0.2`) without skipping. Snapshot builds (`-next`, `nightly`, `dirty`) are `isDev` and skip `database_versions` poisoning (`hscontrol/db/versioncheck.go:161`).
 
 Update an existing StealthScale installation:
 
@@ -25,7 +26,7 @@ StealthScale applies database migrations during upgrades (`hscontrol/db/db.go:96
     Standard install (from [official releases](install/official.md) or [StealthScale install](../stealthscale/install.md)) uses:
 
     - Config: `/etc/stealthscale/config.yaml`
-    - Data dir: `/var/lib/stealthscale` (or `/var/lib/coordination` for current deb, per `packaging/systemd/stealthscale.service`)
+    - Data dir: `/var/lib/stealthscale (Linux) / %ProgramData%\stealthscale (Windows) / /Library/Application Support/stealthscale (macOS)` (or `/var/lib/stealthscale (historical `/var/lib/coordination` pre-0.0.1)` for current deb, per `packaging/systemd/stealthscale.service`)
     - SQLite: `/var/lib/stealthscale/db.sqlite`
     - VLESS identity: `/var/lib/stealthscale/.xray_secret` — **must be backed up** (next to `db.sqlite`), otherwise `NodeUUID`/`NodePort` and `public_key`/`shortId` change
 
@@ -57,4 +58,4 @@ StealthScale applies database migrations during upgrades (`hscontrol/db/db.go:96
 
     Follow PostgreSQL [Backup and Restore](https://www.postgresql.org/docs/current/backup.html). **Also backup `xray.secret` from `config.yaml`** — there is no local `.xray_secret` file, and `stealthscale` will refuse to start without it (`xray.secret is required when database.type is postgres`). Keep `xray.reality.dest`/`server_names`/`short_ids` stable too or clients must update `--vless-uri`.
 
-Changing `xray.reality.dest` (e.g. `www.microsoft.com:443` → `www.cloudflare.com:443`) does **not** change `NodeUUID`/`NodePort` but does change `pbk`/`sid`/`dest` in the `vless://` URI — clients must update their `--vless-uri`.
+Changing `xray.listen_port`/`max_listen_port` range **is breaking** — it rotates every `NodePort` (`hscontrol/xray/vless.go:172` `HMAC(secret,"node-port:<id>") % span`), like `xray.secret`; clients must re-issue `vless://` URIs. Changing `xray.reality.dest` (e.g. `www.microsoft.com:443` → `www.cloudflare.com:443`) does **not** change `NodeUUID`/`NodePort` but does change `pbk`/`sid`/`dest` in the `vless://` URI — clients must update their `--vless-uri`.

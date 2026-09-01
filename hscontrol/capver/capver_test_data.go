@@ -9,11 +9,9 @@ var tailscaleLatestMajorMinorTests = []struct {
 	stripV   bool
 	expected []string
 }{
-	{3, false, []string{"v1.94", "v1.96", "v1.98"}},
-	{2, true, []string{"1.96", "1.98"}},
+	{3, false, []string{"v1.98", "v1.100", "v1.101"}},
+	{2, true, []string{"1.100", "1.101"}},
 	{10, true, []string{
-		"1.80",
-		"1.82",
 		"1.84",
 		"1.86",
 		"1.88",
@@ -22,6 +20,8 @@ var tailscaleLatestMajorMinorTests = []struct {
 		"1.94",
 		"1.96",
 		"1.98",
+		"1.100",
+		"1.101",
 	}},
 	{0, false, nil},
 }

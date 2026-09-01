@@ -12,7 +12,7 @@ make build                      # ./stscale
 curl -LO https://github.com/TomiWebPro/stealthscale/releases/latest/download/stscale_linux_amd64
 ```
 
-Supported targets via `.goreleaser.yml` (CGO_ENABLED=0): `linux/amd64`, `linux/arm64`, `linux/arm`, `darwin/amd64`, `darwin/arm64`, `freebsd/amd64`, `windows/amd64`, `windows/arm64`. On any device:
+Supported targets via `.goreleaser.yml` (CGO_ENABLED=0): `linux/amd64`, `linux/arm64`, `linux/arm` (generic), `linux/arm_6` (Pi Zero GOARM=6), `linux/arm_7` (Pi 2/3), `darwin/amd64`, `darwin/arm64`, `freebsd/amd64`, `freebsd/arm64`, `windows/amd64`, `windows/arm64`. On any device:
 
 ```shell
 stscale up \
@@ -37,7 +37,7 @@ We aim to support the last 10 releases of the Tailscale client for control-plane
 
 ## Instructions endpoint
 
-A legacy Tailscale connect endpoint is still available at `/apple` and `/windows` on a running instance for reference, but it describes the **non-stealth** path and will return `404` when `enforce_control:true`. Prefer the unified binary.
+A legacy Tailscale connect endpoint is still available at `/apple` and `/windows` on a running instance for reference, but it describes the **non-stealth** path and remains `200` even when `enforce_control:true` — only `/ts2021` is gated (`hscontrol/app.go:509-516`), fingerprinting risk noted in `hscontrol/app.go:530`. Prefer the unified binary.
 
 ## Reference patch (optional)
 

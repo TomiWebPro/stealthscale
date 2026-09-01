@@ -1,7 +1,7 @@
 ---
 # The server will look for a configuration file named `config.yaml` (or `config.json`) in the following order:
 #
-# - `/etc/stealthscale`
+# - `/etc/stealthscale (Linux) / %ProgramData%\stealthscale (Windows) / /Library/Application Support/stealthscale (macOS) — see docs/ref/configuration.md for per-OS search order`
 # - `~/.stealthscale`
 # - current working directory
 #
@@ -236,7 +236,7 @@ derp:
   # https://stealthscale.net/stable/ref/derp/
   #
   # paths:
-  #   - /etc/stealthscale/derp-example.yaml
+  #   - /etc/stealthscale (Linux) / %ProgramData%\stealthscale (Windows) / /Library/Application Support/stealthscale (macOS) — see docs/ref/configuration.md for per-OS search order/derp-example.yaml
   paths: []
 
   # If enabled, a worker will be set up to periodically

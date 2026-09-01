@@ -37,7 +37,20 @@ func (h *StealthScale) listenSocket(ctx context.Context) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(h.cfg.UnixSocket, h.cfg.UnixSocketPermission); err != nil {
+	// Enforce owner-only permissions even if historic config still has 0770.
+	// Group/other bits are masked to prevent container-breakout privesc via
+	// membership in stealthscale/docker/www-data groups. Directory is 0700
+	// via EnsureDir; socket file itself is 0600 (or 0700 masked).
+	perm := h.cfg.UnixSocketPermission.Perm() & 0o777
+	// Strip group/other entirely
+	perm &^= 0o077
+	if perm == 0 {
+		perm = 0o600
+	} else if perm&0o600 != 0o600 {
+		perm |= 0o600
+		perm &^= 0o077
+	}
+	if err := os.Chmod(h.cfg.UnixSocket, perm); err != nil {
 		lis.Close()
 		return nil, err
 	}

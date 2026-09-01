@@ -15,19 +15,33 @@ set -e
 # for details, see https://www.debian.org/doc/debian-policy/ or
 # the debian-policy package.
 
-STEALTHSCALE_USER="coordination"
-STEALTHSCALE_GROUP="coordination"
-STEALTHSCALE_HOME_DIR="/var/lib/coordination"
+STEALTHSCALE_USER="stealthscale"
+STEALTHSCALE_GROUP="stealthscale"
+STEALTHSCALE_HOME_DIR="/var/lib/stealthscale"
 STEALTHSCALE_SHELL="/usr/sbin/nologin"
 STEALTHSCALE_SERVICE="stealthscale.service"
 
 case "$1" in
     configure)
+      # Migrate old coordination data dir to stealthscale if present
+      if [ -d "/var/lib/coordination" ] && [ ! -d "/var/lib/stealthscale" ]; then
+        echo "Migrating /var/lib/coordination -> /var/lib/stealthscale ..." >&2
+        mv /var/lib/coordination /var/lib/stealthscale || cp -a /var/lib/coordination /var/lib/stealthscale || true
+        chown -R "$STEALTHSCALE_USER:$STEALTHSCALE_GROUP" /var/lib/stealthscale || true
+      elif [ -d "/var/lib/coordination" ] && [ -d "/var/lib/stealthscale" ]; then
+        # Both exist: ensure stealthscale owns new dir, but keep old as backup
+        chown -R "$STEALTHSCALE_USER:$STEALTHSCALE_GROUP" /var/lib/stealthscale || true
+      fi
+      # Clean up orphan coordination user if exists and stealthscale now canonical
+      if id -u "coordination" >/dev/null 2>&1 && [ "$STEALTHSCALE_USER" != "coordination" ]; then
+        # keep for compat but ensure stealthscale user exists
+        :
+      fi
       groupadd --force --system "$STEALTHSCALE_GROUP"
       if ! id -u "$STEALTHSCALE_USER" >/dev/null 2>&1; then
         useradd --system --shell "$STEALTHSCALE_SHELL" \
           --gid "$STEALTHSCALE_GROUP" --home-dir "$STEALTHSCALE_HOME_DIR" \
-          --comment "coordination service account" "$STEALTHSCALE_USER"
+          --comment "stealthscale service account" "$STEALTHSCALE_USER"
       fi
 
       # Enable service and keep track of its state

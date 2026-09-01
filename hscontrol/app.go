@@ -413,6 +413,9 @@ func (h *StealthScale) scheduledTasks(ctx context.Context) {
 // X-Frame-Options / CSP / X-Content-Type-Options headers are themselves a
 // fingerprint that distinguishes this server from a benign website, and the
 // control protocol is machine-to-machine and needs no browser hardening.
+// Note: exact-match previously missed real paths like /api/v1/node,
+// /api/v2/device/{id} and caused API responses to carry browser headers
+// (fingerprintable vs decoy). Now we use prefix matching for /api/*.
 var controlPlanePaths = map[string]bool{
 	ts2021UpgradePath:       true,
 	"/key":                  true,
@@ -433,6 +436,26 @@ var controlPlanePaths = map[string]bool{
 	"/robots.txt":           true,
 }
 
+func isControlPlanePath(p string) bool {
+	if controlPlanePaths[p] {
+		return true
+	}
+	// Prefix checks for API and other control paths that have sub-resources
+	if strings.HasPrefix(p, "/api/") || p == "/api" {
+		return true
+	}
+	if strings.HasPrefix(p, "/register/") || strings.HasPrefix(p, "/auth/") {
+		return true
+	}
+	if strings.HasPrefix(p, "/apple/") || strings.HasPrefix(p, "/windows/") {
+		return true
+	}
+	if p == "/ts2021" || strings.HasPrefix(p, "/ts2021/") {
+		return true
+	}
+	return false
+}
+
 // securityHeaders sets baseline response headers on HTML/UI responses:
 // deny framing (clickjacking), forbid MIME-type sniffing, drop the Referer
 // header on outbound navigation. Cheap defense-in-depth for human-facing
@@ -440,7 +463,7 @@ var controlPlanePaths = map[string]bool{
 // so those do not advertise a browser-oriented header set (a fingerprint).
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if controlPlanePaths[r.URL.Path] {
+		if isControlPlanePath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -456,12 +479,13 @@ func securityHeaders(next http.Handler) http.Handler {
 // gateDERPOnStealth wraps a DERP handler so it only answers while the stealth
 // transport is satisfied; otherwise it refuses (fail-closed) to avoid leaking
 // the fingerprintable DERP protocol on the public control port when stealth is
-// not actually serving.
+// not actually serving. Returns 404 (not 421) to avoid distinctive error
+// that distinguishes stealth failure from decoy's 404.
 func (h *StealthScale) gateDERPOnStealth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !derp.ShouldIncludeDERP(h.cfg) {
 			IncDERPGated()
-			http.Error(w, "stealth transport not satisfied", http.StatusMisdirectedRequest)
+			http.NotFound(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -601,7 +625,19 @@ func (h *StealthScale) Serve() error {
 	}
 
 	if dumpConfig {
-		spew.Dump(h.cfg)
+		// Redact secrets before dumping — previous unsanitized Dump leaked
+		// XRay.Secret, Reality.PrivateKey, OIDC.ClientSecret, DB/Postgres.Pass
+		// to stderr/control_logs via env STEALTHSCALE_DEBUG_DUMP_CONFIG.
+		cfgCopy := *h.cfg
+		cfgCopy.XRay.Secret = "<redacted>"
+		cfgCopy.XRay.Reality.PrivateKey = "<redacted>"
+		cfgCopy.XRay.Reality.PublicKey = "<redacted>"
+		cfgCopy.OIDC.ClientSecret = "<redacted>"
+		cfgCopy.Database.Postgres.Pass = "<redacted>"
+		cfgCopy.CLI.APIKey = "<redacted>"
+		// Also redact raw viper values that may contain secrets
+		spew.Dump(cfgCopy)
+		log.Warn().Msg("STEALTHSCALE_DEBUG_DUMP_CONFIG is enabled — config dumped with secrets redacted; unset in production")
 	}
 
 	versionInfo := types.GetVersionInfo()
@@ -1110,6 +1146,11 @@ func (h *StealthScale) StopXRayServer(ctx context.Context) {
 // to users, nodes, policies, and other server state.
 func (h *StealthScale) GetState() *state.State {
 	return h.state
+}
+
+// GetConfig returns the server's configuration.
+func (h *StealthScale) GetConfig() *types.Config {
+	return h.cfg
 }
 
 // SetServerURLForTest updates the server URL in the configuration.

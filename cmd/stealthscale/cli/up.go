@@ -33,7 +33,7 @@ func init() {
 	upCmd.Flags().String("endpoint", "", "Alias for --vless-uri")
 	_ = upCmd.Flags().MarkHidden("endpoint")
 	upCmd.Flags().String("hostname", "", "Hostname to register as (defaults to OS hostname)")
-	upCmd.Flags().String("state-dir", "", "Directory to persist machine key (defaults to ~/.stealthscale or /var/lib/stealthscale)")
+	upCmd.Flags().String("state-dir", "", "Directory to persist machine key (defaults to %ProgramData%\\stealthscale on Windows, ~/.stealthscale or /var/lib/stealthscale elsewhere)")
 	upCmd.Flags().Bool("insecure", false, "Skip TLS verification for coordinator (useful for self-signed)")
 	upCmd.Flags().Duration("timeout", 15*time.Second, "Dial timeout")
 	rootCmd.AddCommand(upCmd)
@@ -52,12 +52,23 @@ xray.enabled=true, security=reality_xtls); holepunching via DERP/STUN is
 exempt. Once two peers have identified each other, all further transport
 is stealth per docs/stealthscale/overview.md#bootstrap-discovery-and-steady-state-transport.
 
-Discovery (finding the coordinator for the first time) may use non-stealth
-mechanisms; the registration handshake after discovery must be stealth.
+Discovery vs stealth:
+  Plain HTTPS GET /key is discovery (allowed non-stealth per overview.md#bootstrap);
+  VLESS+Noise registration is stealth. DERP fail-closed is gated on stealth — when
+  stealth_satisfied is false, DERP/STUN are suppressed (check via 'stscale health'
+  or curl /web/api/derp). See docs/stealthscale/overview.md#bootstrap.
 
 Examples:
-  stscale up --coordinator https://ctl.example.com --authkey <key> --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls'
+  # Manual: fetch VLESS URI on coordinator, then paste to client
+  stscale nodes vless 1  # on coordinator, prints vless://...
+  stscale up --coordinator https://ctl.example.com --authkey <key> --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls&pbk=...&sid=...&dest=...&fp=chrome'
+
+  # Alias endpoint
   stscale up --coordinator https://ctl.example.com --authkey <key> --endpoint 'vless://...'
+
+  # Check stealth/DERP status
+  stscale health
+  curl -s http://127.0.0.1:8080/web/api/derp | jq .stealth_satisfied
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		coordinator, _ := cmd.Flags().GetString("coordinator")
@@ -102,7 +113,7 @@ Examples:
 		pterm.Info.Printf("dialling VLESS %s@%s:%d (security=%s, dest=%s, fp=%s)...\n", cfg.ID[:8]+"...", cfg.Address, cfg.Port, cfg.Security, cfg.Dest, cfg.FP)
 		conn, err := xray.DialVLESS(ctx, cfg)
 		if err != nil {
-			return fmt.Errorf("VLESS dial failed (stealth transport not satisfied): %w\n\nThe endpoint must be reachable and the UUID must match the listener.\nCheck firewall for xray.listen_port..max_listen_port and that the node exists (coordinator must have created its VLESS listener).", err)
+			return fmt.Errorf("VLESS dial failed (stealth transport not satisfied): %w\n\nHints:\n- endpoint must be reachable (firewall: xray.listen_port..max_listen_port)\n- UUID/port derived from xray.secret — ensure coordinator's secret is stable\n- pbk/sid mismatch: verify 'stscale nodes vless <id>' URI matches client (check pbk, sid, dest, fp columns with --verbose)\n- if coordinator's xray.listen_addr is 0.0.0.0, URI contains 0.0.0.0 — override with public IP\n- check 'curl http://<coordinator>/web/api/derp | jq .stealth_satisfied' and 'stscale health'", err)
 		}
 		defer conn.Close()
 		pterm.Success.Printf("VLESS handshake succeeded to %s:%d (security=%s, utls=%s)\n", cfg.Address, cfg.Port, cfg.Security, cfg.FP)
@@ -211,7 +222,8 @@ func loadOrCreateMachineKey(stateDir string) (key.MachinePrivate, error) {
 		if home, err := os.UserHomeDir(); err == nil {
 			stateDir = filepath.Join(home, ".stealthscale")
 		} else {
-			stateDir = "/tmp/stealthscale"
+			// os.TempDir handles Windows (%TEMP%), Linux (/tmp) and darwin correctly.
+			stateDir = filepath.Join(os.TempDir(), "stealthscale")
 		}
 	}
 	if err := os.MkdirAll(stateDir, 0700); err != nil {

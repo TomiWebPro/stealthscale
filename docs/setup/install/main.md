@@ -6,6 +6,9 @@
 
 Each push to `main` produces container images and cross-compiled binaries (`stscale` unified binary: `stscale serve` and `stscale up` same binary, `CGO_ENABLED=0`).
 
+!!! warning "Alpha: no Docker images yet — `kos` disabled in `.goreleaser.yml:110` until native Windows+macOS ready; use `make build` or `goreleaser build --snapshot`"
+
+
 ## Container images (multi-arch amd64/arm64, distroless)
 
 Tagged with short commit hash (`main-<sha>`):

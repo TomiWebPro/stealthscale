@@ -107,7 +107,7 @@ if ($LaunchAtStartup) {
     Write-Host "[*] Enabling autostart at $runKey"
     New-Item -Path $runKey -Force | Out-Null
     Set-ItemProperty -Path $runKey -Name "StealthScale" -Value $runValue
-    Write-Host "[*] Autostart enabled (tray mode requires tray binary, see windows-hide-in-tray)"
+    Write-Host "[*] Autostart enabled (tray: stscale serve --tray, WebUI at http://127.0.0.1:8080/web)"
 }
 
 Write-Host "[*] Done."

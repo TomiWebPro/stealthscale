@@ -15,11 +15,34 @@ function setTab(name){
   if(name==='derp') loadDERP();
   if(name==='health') loadHealth();
 }
+function getAPIKey(){ return localStorage.getItem('stscale_apikey')||''; }
+function setAPIKey(k){ if(k) localStorage.setItem('stscale_apikey', k); else localStorage.removeItem('stscale_apikey'); }
+function ensureAPIKey(){
+  if(getAPIKey()) return true;
+  const k = prompt('StealthScale API key required (WebUI auth).\nCreate one via: stscale apikeys create\nEnter API key (or cancel to continue unauth):');
+  if(k){ setAPIKey(k.trim()); return true; }
+  return false;
+}
 async function fetchJSON(path){
-  const r = await fetch(apiBase()+path);
+  const headers = {};
+  const key = getAPIKey();
+  if(key) headers['Authorization'] = 'Bearer '+key;
+  const r = await fetch(apiBase()+path, {headers});
+  if(r.status===401){
+    // Prompt for key on 401 and retry once
+    if(ensureAPIKey()){
+      const key2 = getAPIKey();
+      const h2 = key2? {'Authorization':'Bearer '+key2}: {};
+      const r2 = await fetch(apiBase()+path, {headers:h2});
+      if(!r2.ok) throw new Error(await r2.text());
+      return r2.json();
+    }
+    throw new Error('401 authentication required — set API key via localStorage stscale_apikey or prompt');
+  }
   if(!r.ok) throw new Error(await r.text());
   return r.json();
 }
+async function promptAPIKey(){ const k=prompt('Enter API key to store in localStorage:'); if(k!==null){ setAPIKey(k.trim()); alert(k.trim()?'API key saved (localStorage)':'API key cleared'); } }
 async function loadNodes(){
   try{
     const d = await fetchJSON('/nodes');

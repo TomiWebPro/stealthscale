@@ -37,11 +37,11 @@ When hardening is disabled, all endpoints serve JSON from the live `state.State`
 
 ```
 GET    /web/api/nodes        # list nodes
-DELETE /web/api/nodes/{id}   # delete node (stub — wire to state.DeleteNode)
+DELETE /web/api/nodes/{id}   # delete node (delegates to `state.DeleteNode(NodeView)`, falls back to stub in tests)
 GET    /web/api/users        # list users
-POST   /web/api/users        # create user {name, email}
+POST   /web/api/users        # create user {name, email} (delegates to `state.CreateUser` with Change)
 GET    /web/api/preauthkeys  # list pre-auth keys
-POST   /web/api/preauthkeys  # create pre-auth key {userID, reusable, ephemeral, aclTags}
+POST   /web/api/preauthkeys  # create pre-auth key {userID, reusable, ephemeral, aclTags, expiry} (delegates to `state.CreatePreAuthKey`)
 GET    /web/api/policy       # current policy
 PUT    /web/api/policy       # set policy {policy: "HuJSON string"} (also POST)
 GET    /web/api/derp         # DERP map + stealth_satisfied flag
@@ -58,3 +58,6 @@ The UI is registered via `hscontrol/webui.Register(mux, cfg, state)` in `hscontr
 ## Reverse proxy and TLS
 
 Terminate TLS at your reverse proxy and forward `/web` and `/` to the StealthScale server. See [Reverse proxy](../ref/integration/reverse-proxy.md) and [TLS](../ref/tls.md).
+
+
+> **Parity gaps (tracked):** `nodes expire/rename/tag/approve-routes`, `preauthkeys expire/delete`, `apikeys` CRUD, `auth` approve, and policy `check` are CLI-only (`cmd/stealthscale/cli/*.go`) and not yet in WebUI tabs (`frontend/index.html`). See `feature-webui-management-parity` and `ui-webui-write-stubs-and-cli-parity`. WebUI now stores API key in `localStorage` and sends `Authorization: Bearer` (see `frontend/app.js:ensureAPIKey`). Hardened default requires `enforce && enforce_control` but now validates via `ValidateAPIKey` (not presence only).

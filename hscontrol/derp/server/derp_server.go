@@ -180,7 +180,12 @@ func (d *DERPServer) DERPHandler(
 
 func (d *DERPServer) serveWebsocket(writer http.ResponseWriter, req *http.Request) {
 	websocketConn, err := websocket.Accept(writer, req, &websocket.AcceptOptions{
-		Subprotocols:   []string{"derp"},
+		Subprotocols: []string{"derp"},
+		// OriginPatterns "*" is intentional for Tailscale DERP websocket (derp subprotocol)
+		// — js/wasm clients connect from the control-plane origin via the embedded DERP
+		// relay. This is not HTTP CORS (probe handler's Access-Control-Allow-Origin
+		// wildcard was removed in hscontrol/derp/server/derp_server.go:280). The websocket
+		// upgrade is gated by ShouldIncludeDERP (fail-closed) and VerifyClient.
 		OriginPatterns: []string{"*"},
 		// Disable compression because DERP transmits WireGuard messages that
 		// are not compressible.
@@ -277,13 +282,17 @@ func (d *DERPServer) servePlain(writer http.ResponseWriter, req *http.Request) {
 
 // DERPProbeHandler is the endpoint that js/wasm clients hit to measure
 // DERP latency, since they can't do UDP STUN queries.
+// No wildcard CORS — previous Access-Control-Allow-Origin: * enabled
+// cross-origin latency side-channel probing. Now omitted; browser
+// clients must be same-origin or use explicit allowlist via reverse proxy.
 func DERPProbeHandler(
 	writer http.ResponseWriter,
 	req *http.Request,
 ) {
 	switch req.Method {
 	case http.MethodHead, http.MethodGet:
-		writer.Header().Set("Access-Control-Allow-Origin", "*")
+		// Explicitly do not set Access-Control-Allow-Origin: *.
+		// If CORS is needed, operator should configure reverse proxy allowlist.
 		writer.WriteHeader(http.StatusOK)
 	default:
 		writer.WriteHeader(http.StatusMethodNotAllowed)

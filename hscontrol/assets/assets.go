@@ -12,6 +12,11 @@ import (
 //go:embed favicon.png
 var Favicon []byte
 
+// TrayIcon is the embedded Windows tray icon (ICO, 256/48/32/16).
+//
+//go:embed tray.ico
+var TrayIcon []byte
+
 // CSS is the embedded style.css stylesheet used in HTML templates.
 // Contains Material for MkDocs design system styles.
 //

@@ -3,6 +3,8 @@ module github.com/tomiwebpro/stealthscale
 go 1.26.5
 
 require (
+	fyne.io/systray v1.11.1-0.20250812065214-4856ac3adc3c
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/arl/statsviz v0.8.0
 	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/chasefleming/elem-go v0.31.0
@@ -44,6 +46,7 @@ require (
 	github.com/tailscale/squibble v0.0.0-20260411062017-141f5d618bc4
 	github.com/tailscale/tailsql v0.0.0-20260522170732-77aec5aabc76
 	github.com/tcnksm/go-latest v0.0.0-20170313132115-e3007ae9052e
+	github.com/toqueteos/webbrowser v1.2.0
 	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
 	golang.org/x/crypto v0.53.0
@@ -98,10 +101,8 @@ require (
 	atomicgo.dev/schedule v0.1.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
-	fyne.io/systray v1.11.1-0.20250812065214-4856ac3adc3c // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Kodeworks/golang-image-ico v0.0.0-20141118225523-73f0f4cfade9 // indirect
-	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/Nvveen/Gotty v0.0.0-20120604004816-cd527374f1e5 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e // indirect
@@ -225,7 +226,6 @@ require (
 	github.com/tailscale/setec v0.0.0-20260310221408-dcd97e42f251 // indirect
 	github.com/tailscale/web-client-prebuilt v0.0.0-20251127225136-f19339b67368 // indirect
 	github.com/tailscale/wireguard-go v0.0.0-20260527010701-b48af7099cad // indirect
-	github.com/toqueteos/webbrowser v1.2.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect

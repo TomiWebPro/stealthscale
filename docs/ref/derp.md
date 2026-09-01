@@ -32,7 +32,7 @@ traversal. [Check DERP server connectivity](#check-derp-server-connectivity) to 
 
 ### Remove Tailscale's DERP servers
 
-StealthScale defaults `derp.urls: []` — **no public Tailscale DERP** is loaded. This is intentional for stealth (public DERP leaks relay topology). If you migrated from Headscale where `urls: [https://controlplane.tailscale.com/derpmap/default]` was set, remove it to match the stealth default. To only use the embedded DERP (still stealth-gated):
+StealthScale defaults `derp.urls: []` — **no public Tailscale DERP** is loaded. This is intentional for stealth (no relay leakage). **Intentional deviation from Headscale** which defaults `derp.urls: [https://controlplane.tailscale.com/derpmap/default]`. To mimic Headscale, set `derp.urls` or enable embedded DERP (`derp.server.enabled:true`). `stscale configtest` warns when `derp.urls==[] && !derp.server.enabled` (see `feature-derp-public-map-default`). (public DERP leaks relay topology). If you migrated from Headscale where `urls: [https://controlplane.tailscale.com/derpmap/default]` was set, remove it to match the stealth default. To only use the embedded DERP (still stealth-gated):
 
 ```yaml title="config.yaml" hl_lines="6"
 derp:

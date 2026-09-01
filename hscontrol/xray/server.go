@@ -14,6 +14,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -112,41 +113,33 @@ func NewServer(cfg *types.XRayConfig, handler func(net.Conn)) (*Server, error) {
 		}
 		applyUTLSFingerprint(s.tlsConfig, cfg.UTLSFingerprint)
 	case "reality_xtls":
-		// If operator explicitly supplied a TLS cert, honour it as a plain TLS
-		// fallback (old behaviour). Otherwise configure true Reality.
-		if cfg.CertFile != "" && cfg.KeyFile != "" {
-			cert, err := utls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
-			if err != nil {
-				return nil, fmt.Errorf("loading xray TLS credentials for reality_xtls: %w", err)
-			}
-			s.tlsConfig = &utls.Config{
-				Certificates: []utls.Certificate{cert},
-				MinVersion:   tls.VersionTLS12,
-			}
-			applyUTLSFingerprint(s.tlsConfig, cfg.UTLSFingerprint)
-			log.Warn().Msg("xray: reality_xtls with explicit cert_file/key_file — using TLS fallback; for true Reality unset cert_file")
-		} else {
-			rc, err := buildRealityConfig(cfg)
-			if err != nil {
-				return nil, fmt.Errorf("building reality config: %w", err)
-			}
-			s.realityConfig = rc
-			// Prime the global post-handshake lens cache so the first client
-			// handshake doesn't block waiting for dest probing. This dials the
-			// dest in the background using utls (same as xray's NewListener).
-			go reality.DetectPostHandshakeRecordsLens(rc)
-			fp := cfg.UTLSFingerprint
-			if fp == "" {
-				fp = "chrome"
-			}
-			log.Info().
-				Str("security", "reality_xtls").
-				Str("utls", fp).
-				Str("reality_dest", rc.Dest).
-				Strs("server_names", cfg.Reality.ServerNames).
-				Str("short_id", cfg.Reality.ShortID).
-				Msg("xray: reality_xtls stealth transport enabled (xtls/reality)")
+		// Fail-closed: reality_xtls must not silently downgrade to plain TLS
+		// when cert_file/key_file are leftover. Operator must explicitly set
+		// security: tls to use certs; otherwise Reality is required. This
+		// avoids fingerprintable locally-issued certs disabling stealth.
+		if cfg.CertFile != "" || cfg.KeyFile != "" {
+			return nil, fmt.Errorf("xray: security=reality_xtls but cert_file/key_file are set — refusing silent TLS fallback; set security: \"tls\" explicitly if you intend plain TLS, or unset cert_file/key_file for true Reality")
 		}
+		rc, err := buildRealityConfig(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("building reality config: %w", err)
+		}
+		s.realityConfig = rc
+		// Prime the global post-handshake lens cache so the first client
+		// handshake doesn't block waiting for dest probing. This dials the
+		// dest in the background using utls (same as xray's NewListener).
+		go reality.DetectPostHandshakeRecordsLens(rc)
+		fp := cfg.UTLSFingerprint
+		if fp == "" {
+			fp = "chrome"
+		}
+		log.Info().
+			Str("security", "reality_xtls").
+			Str("utls", fp).
+			Str("reality_dest", rc.Dest).
+			Strs("server_names", cfg.Reality.ServerNames).
+			Str("short_id", cfg.Reality.ShortID).
+			Msg("xray: reality_xtls stealth transport enabled (xtls/reality)")
 	case "none", "":
 		// no TLS
 	default:
@@ -226,6 +219,10 @@ func buildRealityConfig(cfg *types.XRayConfig) (*reality.Config, error) {
 			log.Warn().Str("short_id", sidHex).Msg("xray: skipping invalid reality short_id")
 			continue
 		}
+		if len(b) > 8 {
+			log.Warn().Str("short_id", sidHex).Int("len", len(b)).Msg("xray: reality short_id too long (max 8 bytes), truncating is insecure — rejecting")
+			continue
+		}
 		var arr [8]byte
 		copy(arr[:], b)
 		shortIds[arr] = true
@@ -234,9 +231,13 @@ func buildRealityConfig(cfg *types.XRayConfig) (*reality.Config, error) {
 		// At least allow the derived shortId
 		if cfg.Reality.ShortID != "" {
 			if b, err := hex.DecodeString(cfg.Reality.ShortID); err == nil {
-				var arr [8]byte
-				copy(arr[:], b)
-				shortIds[arr] = true
+				if len(b) > 8 {
+					log.Warn().Str("short_id", cfg.Reality.ShortID).Msg("xray: derived short_id too long, ignoring")
+				} else {
+					var arr [8]byte
+					copy(arr[:], b)
+					shortIds[arr] = true
+				}
 			}
 		}
 	}
@@ -459,7 +460,20 @@ func (s *Server) handleConn(ctx context.Context, nodeID types.NodeID, conn net.C
 		rConn, err := reality.Server(ctx, conn, s.realityConfig)
 		if err != nil {
 			realityHandshakeFailure.WithLabelValues(dest, sni, "reality_server").Inc()
-			log.Error().Err(err).Uint64("node_id", uint64(nodeID)).Msg("xray: Reality handshake failed")
+			log.Error().Err(err).Uint64("node_id", uint64(nodeID)).Msg("xray: Reality handshake failed — falling back to decoy dest to avoid fingerprintable RST")
+			// Fallback to decoy dest to mimic legitimate TLS site behavior.
+			// Without this, we send RST while decoy would return 400/301,
+			// giving a fingerprint oracle.
+			if dest != "" {
+				// Attempt to proxy the already-read ClientHello to dest
+				// Dial dest and relay; best-effort to avoid RST.
+				if dConn, dErr := s.realityConfig.DialContext(ctx, "tcp", dest); dErr == nil {
+					defer dConn.Close()
+					// Relay both directions briefly to look like decoy
+					go func() { _, _ = io.Copy(dConn, conn) }()
+					_, _ = io.Copy(conn, dConn)
+				}
+			}
 			return
 		}
 		realityHandshakeSuccess.WithLabelValues(dest, sni).Inc()
@@ -497,10 +511,16 @@ func (s *Server) handleConn(ctx context.Context, nodeID types.NodeID, conn net.C
 
 	expected := NodeUUID(nodeID, s.cfg.Secret)
 	if clientUUID != expected {
+		// Never log expected UUID — it is HMAC(secret,"uuid-namespace")[:16]→UUIDv5,
+		// a long-term credential. Logging it to stdout/control_logs leaks it.
+		// Log only node_id and truncated got_uuid for debugging.
+		gotPrefix := clientUUID
+		if len(gotPrefix) > 8 {
+			gotPrefix = gotPrefix[:8]
+		}
 		log.Warn().
 			Uint64("node_id", uint64(nodeID)).
-			Str("got_uuid", clientUUID).
-			Str("want_uuid", expected).
+			Str("got_uuid_prefix", gotPrefix).
 			Msg("xray: rejecting connection: UUID mismatch")
 		return
 	}

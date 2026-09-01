@@ -313,8 +313,8 @@ func (x *XRayConfig) InitIdentity(stateDir string) error {
 
 	if x.Reality.ShortID == "" {
 		sid := realityHMAC(x.Secret, "reality-sid")
-		if len(sid) > 4 {
-			sid = sid[:4]
+		if len(sid) > 8 {
+			sid = sid[:8]
 		}
 		x.Reality.ShortID = hex.EncodeToString(sid)
 	}
@@ -376,8 +376,19 @@ func loadOrCreateSecret(stateDir string) (string, error) {
 		return "", err
 	}
 	p := filepath.Join(stateDir, ".xray_secret")
-	if data, err := os.ReadFile(p); err == nil && len(strings.TrimSpace(string(data))) >= 16 {
-		return strings.TrimSpace(string(data)), nil
+	if data, err := os.ReadFile(p); err == nil {
+		trimmed := strings.TrimSpace(string(data))
+		if len(trimmed) == 64 {
+			if _, err := hex.DecodeString(trimmed); err == nil {
+				return trimmed, nil
+			}
+			log.Warn().Str("path", p).Msg("xray secret is not valid hex (expected 64 hex chars from openssl rand -hex 32), regenerating")
+		} else if len(trimmed) >= 16 {
+			// Legacy weak secret (16+ chars but not 64 hex) — reject to avoid
+			// reduced NodeUUID/NodePort entropy. Regenerate a strong one.
+			log.Warn().Str("path", p).Int("len", len(trimmed)).Msg("xray secret is weak (not 64 hex chars), regenerating with strong 32-byte hex")
+		}
+		// If file exists but invalid, fall through to regenerate
 	}
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -672,14 +683,18 @@ func LoadConfig(path string, isFile bool) error {
 				if home := os.Getenv("HOME"); home != "" {
 					viper.AddConfigPath(filepath.Join(home, "Library", "Application Support", "stealthscale"))
 					viper.AddConfigPath(filepath.Join(home, ".stealthscale"))
-				} else {
-					viper.AddConfigPath("$HOME/Library/Application Support/stealthscale")
-					viper.AddConfigPath("$HOME/.stealthscale")
+				} else if hd, err := os.UserHomeDir(); err == nil && hd != "" {
+					viper.AddConfigPath(filepath.Join(hd, "Library", "Application Support", "stealthscale"))
+					viper.AddConfigPath(filepath.Join(hd, ".stealthscale"))
 				}
 				viper.AddConfigPath(".")
 			default:
 				viper.AddConfigPath("/etc/stealthscale/")
-				viper.AddConfigPath("$HOME/.stealthscale")
+				if home := os.Getenv("HOME"); home != "" {
+					viper.AddConfigPath(filepath.Join(home, ".stealthscale"))
+				} else if hd, err := os.UserHomeDir(); err == nil && hd != "" {
+					viper.AddConfigPath(filepath.Join(hd, ".stealthscale"))
+				}
 				viper.AddConfigPath(".")
 			}
 		} else {
@@ -738,7 +753,7 @@ func LoadConfig(path string, isFile bool) error {
 	default:
 		viper.SetDefault("unix_socket", "/var/run/stealthscale/stealthscale.sock")
 	}
-	viper.SetDefault("unix_socket_permission", "0o770")
+	viper.SetDefault("unix_socket_permission", "0o700")
 
 	viper.SetDefault("cli.timeout", "5s")
 	viper.SetDefault("cli.insecure", false)
@@ -795,6 +810,28 @@ func LoadConfig(path string, isFile bool) error {
 	viper.SetDefault("tuning.node_store_batch_timeout", "500ms")
 
 	viper.SetDefault("prefixes.allocation", string(IPAllocationStrategySequential))
+
+	// Per-GOOS defaults for stateful paths (database, private keys) — required
+	// for gap-multios and to avoid writing to C:\var\lib on Windows.
+	switch runtime.GOOS {
+	case "windows":
+		pd := os.Getenv("ProgramData")
+		if pd == "" {
+			pd = `C:\ProgramData`
+		}
+		viper.SetDefault("database.sqlite.path", filepath.Join(pd, "stealthscale", "db.sqlite"))
+		viper.SetDefault("noise.private_key_path", filepath.Join(pd, "stealthscale", "noise_private.key"))
+		viper.SetDefault("derp.server.private_key_path", filepath.Join(pd, "stealthscale", "derp_server_private.key"))
+	case "darwin":
+		viper.SetDefault("database.sqlite.path", "/var/lib/stealthscale/db.sqlite")
+		// Alternative per step docs: /Library/Application Support/stealthscale/db.sqlite also supported via config path
+		viper.SetDefault("noise.private_key_path", "/var/lib/stealthscale/noise_private.key")
+		viper.SetDefault("derp.server.private_key_path", "/var/lib/stealthscale/derp_server_private.key")
+	default:
+		viper.SetDefault("database.sqlite.path", "/var/lib/stealthscale/db.sqlite")
+		viper.SetDefault("noise.private_key_path", "/var/lib/stealthscale/noise_private.key")
+		viper.SetDefault("derp.server.private_key_path", "/var/lib/stealthscale/derp_server_private.key")
+	}
 
 	err := viper.ReadInConfig()
 	if err != nil {
@@ -945,7 +982,9 @@ func validateServerConfig() error {
 		}
 		// reality_xtls does NOT require cert_file/key_file — it uses Reality dest dial
 		if security == "reality_xtls" {
-			// Optional dest validation, but allow empty (auto-derived from server_url)
+			if viper.GetString("xray.cert_file") != "" || viper.GetString("xray.key_file") != "" {
+				errorText += "Fatal config error: xray.security=reality_xtls but cert_file/key_file are set — refusing silent downgrade to plain TLS; set security: tls explicitly to use certs or unset cert_file/key_file\n"
+			}
 		}
 		// For postgres there is no local state dir to persist .xray_secret, so
 		// xray.secret must be set explicitly or the identity will change on

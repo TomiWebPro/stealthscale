@@ -23,18 +23,29 @@ log stream --predicate 'process == "stscale"' --info
 
 `goreleaser` builds `darwin_amd64` and `darwin_arm64` `tar.gz` archives (no `dmg`/`pkg` in alpha).
 
-## Windows (service, no Docker)
+## Windows (service + tray, no Docker)
 
-- `packaging/windows/install.ps1` — PowerShell installer for `%ProgramFiles%\stealthscale\stscale.exe` + `%ProgramData%\stealthscale\config.yaml` and a Windows service via `sc.exe`. The local API is exposed over named pipe `\\.\pipe\stealthscale` (`npipe:////./pipe/stealthscale` in CLI/config).
-- `packaging/windows/README.md` — manual `sc.exe` fallback docs.
+- `packaging/windows/install.ps1` — PowerShell installer for `%ProgramFiles%\stealthscale\stscale.exe` + `%ProgramData%\stealthscale\config.yaml` and a Windows service via `sc.exe`. The local API is exposed over named pipe `\\.\pipe\stealthscale` (`npipe:////./pipe/stealthscale` in CLI/config). `-LaunchAtStartup` adds `HKCU\...\Run` for `serve --tray`.
+- `packaging/windows/uninstall.ps1` — clean uninstall (`-Purge` to delete `%ProgramData%\stealthscale`); also `stscale uninstall [--purge]`.
+- `packaging/windows/README.md` — manual `sc.exe` fallback + tray (`serve --tray` via `fyne.io/systray`, Open WebUI, Status, Quit).
 
 ```powershell
 GOOS=windows GOARCH=amd64 go build -o stscale.exe ./cmd/stealthscale
-.\stscale.exe serve --config $env:ProgramData\stealthscale\config.yaml
+.\stscale.exe serve --config $env:ProgramData\stealthscale\config.yaml          # headless service
+.\stscale.exe serve --tray --config $env:ProgramData\stealthscale\config.yaml   # hide-in-tray
 .\stscale.exe --address npipe:////./pipe/stealthscale nodes list
+.\stscale.exe uninstall --purge   # clean removal (also uninstall.ps1 -Purge)
 ```
 
 `goreleaser` builds `windows_amd64` and `windows_arm64` `zip` archives.
+
+## Uninstall (all distributions — clean)
+
+- **Debian/Ubuntu deb**: `sudo apt remove stealthscale` (keep `/var/lib/stealthscale`) or `sudo apt purge stealthscale` (delete state, user). `packaging/deb/postrm:27 purge` removes data.
+- **Linux manual/systemd**: `sudo ./packaging/systemd/uninstall.sh [--purge]` or `sudo stscale uninstall [--purge]` (stops/disables `stealthscale.service`, removes `/usr/bin/stscale`, `--purge` also deletes `/etc/stealthscale`, `/var/lib/stealthscale`).
+- **macOS launchd**: `sudo ./packaging/launchd/uninstall.sh [--purge]` or `sudo stscale uninstall [--purge]` (unloads `com.stealthscale.plist`, removes `/usr/local/bin/stscale`, `/usr/local/etc/stealthscale`, `/Library/Application Support/stealthscale`; `--purge` also logs).
+- **Windows**: `stscale uninstall [--purge]` or `powershell -ExecutionPolicy Bypass -File packaging/windows/uninstall.ps1 -Purge` (stops/deletes `StealthScale` service, removes `%ProgramFiles%\stealthscale`, `HKCU\...\Run`; `--purge` also `%ProgramData%\stealthscale`).
+- **Generic**: `stscale uninstall --help` (prompts, use `--yes`/`--force` to skip).
 
 ## Next alpha
 

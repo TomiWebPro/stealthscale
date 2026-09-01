@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -23,8 +24,18 @@ func init() {
 	}
 
 	cobra.OnInitialize(initConfig)
+	defaultCfg := "/etc/stealthscale/config.yaml"
+	if runtime.GOOS == "windows" {
+		if pd := os.Getenv("ProgramData"); pd != "" {
+			defaultCfg = filepath.Join(pd, "stealthscale", "config.yaml")
+		} else {
+			defaultCfg = `C:\ProgramData\stealthscale\config.yaml`
+		}
+	} else if runtime.GOOS == "darwin" {
+		defaultCfg = "/usr/local/etc/stealthscale/config.yaml"
+	}
 	rootCmd.PersistentFlags().
-		StringVarP(&cfgFile, "config", "c", "", "config file (default is /etc/stealthscale/config.yaml)")
+		StringVarP(&cfgFile, "config", "c", "", "config file (default is "+defaultCfg+")")
 	rootCmd.PersistentFlags().
 		StringP("output", "o", "", "Output format. Empty for human-readable, 'json', 'json-line' or 'yaml'")
 	rootCmd.PersistentFlags().

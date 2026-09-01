@@ -25,8 +25,11 @@ case "$1" in
     ;;
 
     purge)
-      userdel coordination
+      userdel stealthscale || true
+      # Remove both old and new data dirs on purge (old coordination for backward compat)
+      rm -rf /var/lib/stealthscale
       rm -rf /var/lib/coordination
+      if id -u coordination >/dev/null 2>&1; then userdel coordination || true; fi
       if [ -x "/usr/bin/deb-systemd-helper" ]; then
         deb-systemd-helper purge stealthscale.service >/dev/null || true
       fi

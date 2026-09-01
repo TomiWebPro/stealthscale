@@ -22,8 +22,8 @@ StealthScale keeps the full Headscale control-plane feature set while replacing 
 - [x] Embedded [DERP server](../ref/derp.md) — enabled via `derp.server.enabled`, STUN `udp/3478`, verify_clients
 - [x] [Policy](../ref/policy.md) — ACLs, Grants, autogroups (`self`, `member`, `internet`, `tagged`), auto-approvers, Tailscale SSH, nodeAttrs, tests
 - [x] [OIDC](../ref/oidc.md) — generic OIDC, PKCE, domain/user/group filters
-- [ ] Funnel — not supported (tracking via GitHub issue)
-- [ ] Serve — not supported
+- [ ] Funnel — not supported (see `hscontrol/policy/v2/types.go:102`, tracking `feature-funnel-serve`) (tracking via GitHub issue)
+- [ ] Serve — not supported (see `feature-funnel-serve`)
 - [ ] Network flow logs
 
 ## Compatibility

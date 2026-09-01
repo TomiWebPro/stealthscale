@@ -23,6 +23,7 @@ import (
 func init() {
 	rootCmd.AddCommand(nodeCmd)
 	listNodesCmd.Flags().StringP("user", "u", "", "Filter by user")
+	listNodesCmd.Flags().StringSlice("tags", nil, "Filter by tags (comma-separated, e.g. tag:server,tag:web)")
 	nodeCmd.AddCommand(listNodesCmd)
 
 	listNodeRoutesCmd.Flags().Uint64P("identifier", "i", 0, "Node identifier (ID)")
@@ -106,6 +107,7 @@ var listNodesCmd = &cobra.Command{
 	Aliases: []string{"ls", cmdShow},
 	RunE: clientRunE(func(ctx context.Context, client *clientv1.ClientWithResponses, cmd *cobra.Command, args []string) error {
 		user, _ := cmd.Flags().GetString("user")
+		tagsFilter, _ := cmd.Flags().GetStringSlice("tags")
 
 		params := &clientv1.ListNodesParams{}
 		if user != "" {
@@ -122,6 +124,17 @@ var listNodesCmd = &cobra.Command{
 		}
 
 		nodes := resp.JSON200.Nodes
+		if len(tagsFilter) > 0 {
+			wanted := setFromSlice(tagsFilter)
+			nodes = lo.Filter(nodes, func(n clientv1.Node, _ int) bool {
+				for _, t := range n.Tags {
+					if _, ok := wanted[t]; ok {
+						return true
+					}
+				}
+				return false
+			})
+		}
 
 		return printListOutput(cmd, nodes, func() error {
 			tableData, err := nodesToPtables(nodes)
@@ -132,6 +145,17 @@ var listNodesCmd = &cobra.Command{
 			return pterm.DefaultTable.WithHasHeader().WithData(tableData).Render()
 		})
 	}),
+}
+
+func setFromSlice(ss []string) map[string]struct{} {
+	m := make(map[string]struct{}, len(ss))
+	for _, s := range ss {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			m[s] = struct{}{}
+		}
+	}
+	return m
 }
 
 var listNodeRoutesCmd = &cobra.Command{
@@ -335,12 +359,22 @@ var nodeVLESSCommand = &cobra.Command{
 			return fmt.Errorf("invalid xray configuration: %w", err)
 		}
 
+		// Warn when listen_addr is 0.0.0.0 — URI will contain 0.0.0.0 which is not reachable externally.
+		if config.Address == "0.0.0.0" || config.Address == "::" || config.Address == "" {
+			pterm.Warning.Printf("URI contains %q — set xray.listen_addr to public IP/FQDN or use --address override; 0.0.0.0 is not dialable from clients\n", config.Address)
+		}
+
 		output := map[string]any{
 			"id":       config.ID,
 			"address":  config.Address,
 			"port":     config.Port,
 			"security": config.Security,
 			"uri":      config.URI(),
+			"pbk":      config.PublicKey,
+			"sid":      config.ShortID,
+			"dest":     config.Dest,
+			"fp":       config.FP,
+			"spx":      config.SpiderX,
 		}
 
 		format, _ := cmd.Flags().GetString("output")
@@ -354,6 +388,10 @@ var nodeVLESSCommand = &cobra.Command{
 			{"Port", strconv.Itoa(config.Port)},
 			{"Security", config.Security},
 			{"URI", config.URI()},
+			{"PBK", config.PublicKey},
+			{"SID", config.ShortID},
+			{"Dest", config.Dest},
+			{"FP", config.FP},
 		}
 
 		return renderTable([]string{"Field", "Value"}, tableData)

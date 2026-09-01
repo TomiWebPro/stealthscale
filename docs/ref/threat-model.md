@@ -7,13 +7,13 @@ remains visible to an observer.
 ## What Reality hides
 
 - **Per-node VLESS listeners** (`xray.listen_addr` + `listen_port`…`max_listen_port`)
-  are wrapped with `xtls/reality` (`hscontrol/xray/server.go:140`
+  are wrapped with `xtls/reality` (`hscontrol/xray/server.go:159`
   `buildRealityConfig` → `reality.Server`). The TLS handshake is stolen from the
   decoy dest (`xray.reality.dest`, default `www.cloudflare.com:443` with second
   decoy `www.microsoft.com:443`; `server_names` includes both plus bare domains).
   A scanner sees the decoy's real certificate (Cloudflare/Microsoft) via
   `openssl s_client -servername www.cloudflare.com`, not a StealthScale cert.
-  `uTLS` (`hscontrol/xray/reality_client.go:112` `RealityUClient`, `hscontrol/xray/client.go:247` `fpToClientHelloID`) shapes the ClientHello (`chrome`, `firefox`, `safari`, `ios`, `randomized`) so JA3/JA4 is a browser, not Go.
+  `uTLS` (`hscontrol/xray/reality_client.go:112` `RealityUClient`, `hscontrol/xray/client.go:220` `fpToClientHelloID`) shapes the ClientHello (`chrome`, `firefox`, `safari`, `ios`, `randomized`) so JA3/JA4 is a browser, not Go.
 - **Noise is inside VLESS**: the Tailscale `controlbase` handshake runs over the
   authenticated VLESS stream (`hscontrol/servertest/xray_vless_test.go`), not on
   the wire.
@@ -26,7 +26,7 @@ remains visible to an observer.
   `xray.stealth.enforce_control:false` (old default). That endpoint is
   fingerprintable as Tailscale/Headscale even though data-plane VLESS is stealth.
 - **Control-plane TLS** (`tls_letsencrypt_*`, `tls_cert_path`) is still plain
-  `crypto/tls`, not Reality. `hscontrol/xray/server.go:140` only covers per-node
+  `crypto/tls`, not Reality. `hscontrol/xray/server.go:159` only covers per-node
   VLESS listeners. To make the control plane indistinguishable from the decoy,
   either (a) wrap `listen_addr` with `reality.Config` (same `Dest`/`ServerNames`/
   `ShortIds`) or (b) place `server_url` behind a Reality-enabled reverse proxy
@@ -71,7 +71,7 @@ unified `stscale up --vless-uri`.
 
 ## References
 
-- `hscontrol/xray/server.go:140` `buildRealityConfig`, `reality.Server` handling, `SessionTicketsDisabled:true` (avoids `tls: unexpected message` + `NewSessionTicket` replay).
+- `hscontrol/xray/server.go:159` `buildRealityConfig`, `reality.Server` handling, `SessionTicketsDisabled:true` (avoids `tls: unexpected message` + `NewSessionTicket` replay).
 - `hscontrol/xray/reality_client.go:112` `RealityUClient` (SessionId AEAD, `VerifyPeerCertificate`).
 - `hscontrol/xray/client.go:55` `DialVLESS` (`vless://` URI `dest`/`pbk`/`sid`/`spx`/`fp` handling, `NodePort`/`NodeUUID` derivation).
 - `config-example.yaml:91` `xray.secret` persistence note, `config-example.yaml:129` `reality.dest` dual decoys.

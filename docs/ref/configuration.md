@@ -70,7 +70,7 @@ xray:
     probe_timeout: 5s
 ```
 
-Validation in `hscontrol/types/config.go:880`: `listen_port`/`max_listen_port` sane, `security` in `none,tls,xtls,reality_xtls`, `tls`/`xtls` require `cert_file`+`key_file`, `reality_xtls` does not, `postgres` requires `xray.secret`. See [XRay/VLESS reference](./xray-vless.md).
+Validation in `hscontrol/types/config.go:928`: `listen_port`/`max_listen_port` sane, `security` in `none,tls,xtls,reality_xtls`, `tls`/`xtls` require `cert_file`+`key_file`, `reality_xtls` does not, `postgres` requires `xray.secret`. See [XRay/VLESS reference](./xray-vless.md).
 
 ### `derp` — relay, gated by stealth
 

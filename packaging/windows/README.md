@@ -35,8 +35,21 @@ sc.exe start StealthScale
 archives as `zip` (no MSI in alpha). Future MSI via `WiX` can be added
 under `nfpms` when needed.
 
-## Tray (future)
+## Tray (alpha.3)
 
-`windows-hide-in-tray` (post-alpha) will add `stscale serve --tray`
-via `systray`. The `install.ps1 -LaunchAtStartup` flag already writes the
-`HKCU\...\Run` key for it so the service + tray share the same pipe.
+`stscale serve --tray` runs with a Windows system tray (hide-in-tray) via
+`fyne.io/systray` (no CGO, `hscontrol/tray/tray_windows.go`). Menu: Open WebUI
+(`http://127.0.0.1:8080/web`), Status (polls `/health` every 5s), Quit. Close
+minimizes to tray; Quit stops the server. `install.ps1 -LaunchAtStartup` writes
+`HKCU\...\Run` → `"C:\Program Files\stealthscale\stscale.exe" serve --tray`.
+The tray and service share the same named pipe `\\.\pipe\stealthscale`.
+
+## Uninstall
+
+```powershell
+# CLI (same on all OS, handles Windows service + Run key + files)
+.\stscale.exe uninstall          # keep %ProgramData%\stealthscale
+.\stscale.exe uninstall --purge  # also delete config, db.sqlite, .xray_secret
+# or script
+powershell -ExecutionPolicy Bypass -File packaging\windows\uninstall.ps1 -Purge
+```

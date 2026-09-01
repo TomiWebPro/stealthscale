@@ -63,7 +63,7 @@ uuid = UUIDv5("6ba7b810-9dad-11d1-80b4-00c04fd430c8", "stealthscale:<id>")
 port = base + sha256("stealthscale-port:<id>") % (max-min+1)
 ```
 
-- `hscontrol/xray/vless.go:152` `NodeUUID()`, `hscontrol/xray/vless.go:172` `NodePort()` — HMAC-keyed when `xray.secret` is set via `types.XRayConfig.InitIdentity`.
+- `hscontrol/xray/vless.go:156` `NodeUUID()`, `hscontrol/xray/vless.go:172` `NodePort()` — HMAC-keyed when `xray.secret` is set via `types.XRayConfig.InitIdentity`.
 - Never changes across restarts when `xray.secret` is stable (persisted to `.xray_secret` for sqlite, must be set explicitly for postgres) → static client config.
 - Fetch: `stscale nodes vless <node-id>` or `GET /web/api/vless/{id}`. The `URI()` includes Reality hints so a patched client can dial with uTLS+Reality.
 
@@ -103,7 +103,7 @@ See implementation `hscontrol/stealth/stealth.go` (`Checker` + `FilterDERPMap`).
 
 No code difference: both import `hscontrol/xray`:
 
-- Server: `hscontrol/xray_server.go:StartXRayServer` calls `xray.NewServer(&cfg.XRay, handler)` and `EnsureNodeListener`.
+- Server: `hscontrol/xray/server.go:StartXRayServer` calls `xray.NewServer(&cfg.XRay, handler)` and `EnsureNodeListener`.
 - Client: `hscontrol/xray/client.go` `DialVLESS(ctx, cfg)` and `WriteVLESSRequest` — writes VLESS header and awaits version byte. Used by `stscale up --coordinator --vless-uri`.
 
 Same `XRayConfig`, same `VLESSConfig.URI()`. Single binary `stscale` can serve or dial (`stscale serve` and `stscale up`).
