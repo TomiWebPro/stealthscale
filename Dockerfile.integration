@@ -30,7 +30,15 @@ RUN apt-get --update install --no-install-recommends --yes \
     bash ca-certificates curl dnsutils findutils iproute2 jq less procps python3 sqlite3 \
   && apt-get dist-clean
 
-RUN mkdir -p /var/run/stealthscale
+RUN mkdir -p /var/run/stealthscale /var/lib/stealthscale /etc/stealthscale
 
-# Copy binaries from builder
+# Copy binaries from builder (stscale is the canonical binary; keep stealthscale symlink for
+# historical integration tests that invoke `stealthscale` inside the container).
 COPY --from=builder /go/bin/stscale /usr/local/bin/stscale
+RUN ln -sf /usr/local/bin/stscale /usr/local/bin/stealthscale
+
+# Persisted state and VLESS Reality secret must be on a volume; expose control,
+# metrics, STUN and the VLESS port range.
+VOLUME ["/var/lib/stealthscale", "/etc/stealthscale"]
+EXPOSE 8080/tcp 9090/tcp 3478/udp 10001-10100/tcp
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/stscale", "health"]

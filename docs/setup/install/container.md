@@ -4,13 +4,13 @@
 
     The authoritative guide is [StealthScale Install & deploy](../../stealthscale/install.md). The container must expose the **per-node VLESS range** `xray.listen_port` … `max_listen_port` (default `10001`–`10100`, `xray.security:reality_xtls`, `xray.secret` auto to `.xray_secret`). Without it, `stscale nodes vless <id>` will print a port that is not reachable. The embedded Web UI is at `/web` and `/admin` on `listen_addr` (hardened by default: `enforce_control:true` → `401` without API key).
 
-A container runtime (Docker/Podman) is required. Images are at:
+A container runtime (Docker/Podman) is required. Images are at (alpha.4 enables full Docker compatibility via `kos`):
 
-!!! warning "Alpha: no Docker images yet — `kos` disabled in `.goreleaser.yml:110` until native Windows+macOS ready; use `make build` or `goreleaser build --snapshot`"
-
-
-- Docker Hub: `docker.io/stealthscale/stealthscale:<VERSION>` (legacy name)
 - GitHub Container Registry (canonical): `ghcr.io/tomiwebpro/stealthscale:<VERSION>` — use this.
+  Tags: `latest`/`stable` for stable releases, `unstable` for prereleases (`alpha.4` → `unstable`, `sha-<commit>` always), and `:debug` variants (distroless vs busybox).
+  Supported platforms: `linux/amd64` and `linux/arm64` (distroless `base-debian13`).
+- Docker Hub: `docker.io/stealthscale/stealthscale:<VERSION>` (legacy name)
+- Manual: `docker build -t stealthscale:local -f Dockerfile --build-arg VERSION=dev .`
 
 ## Configure and run
 

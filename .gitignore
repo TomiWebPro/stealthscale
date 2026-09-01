@@ -67,3 +67,7 @@ __debug_bin
 node_modules/
 package-lock.json
 package.json
+
+# OpenCode assistant config — local only
+opencode.jsonc
+.opencode/

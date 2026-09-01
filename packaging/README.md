@@ -1,6 +1,6 @@
 # Packaging
 
-Distribution packaging for StealthScale native binaries (no Docker until Windows+macOS layers are ready).
+Distribution packaging for StealthScale native binaries and Docker images (alpha.4 enables full Docker compatibility).
 
 ## Linux (systemd + deb)
 
@@ -23,7 +23,7 @@ log stream --predicate 'process == "stscale"' --info
 
 `goreleaser` builds `darwin_amd64` and `darwin_arm64` `tar.gz` archives (no `dmg`/`pkg` in alpha).
 
-## Windows (service + tray, no Docker)
+## Windows (service + tray)
 
 - `packaging/windows/install.ps1` — PowerShell installer for `%ProgramFiles%\stealthscale\stscale.exe` + `%ProgramData%\stealthscale\config.yaml` and a Windows service via `sc.exe`. The local API is exposed over named pipe `\\.\pipe\stealthscale` (`npipe:////./pipe/stealthscale` in CLI/config). `-LaunchAtStartup` adds `HKCU\...\Run` for `serve --tray`.
 - `packaging/windows/uninstall.ps1` — clean uninstall (`-Purge` to delete `%ProgramData%\stealthscale`); also `stscale uninstall [--purge]`.
@@ -39,6 +39,28 @@ GOOS=windows GOARCH=amd64 go build -o stscale.exe ./cmd/stealthscale
 
 `goreleaser` builds `windows_amd64` and `windows_arm64` `zip` archives.
 
+## Docker (distroless via goreleaser kos + standalone Dockerfile)
+
+- `Dockerfile` — production image (debian-trixie-slim, `stscale` + `stealthscale` symlink, volumes `/var/lib/stealthscale` + `/etc/stealthscale`, ports `8080`, `9090`, `3478/udp`, `10001-10100`, HEALTHCHECK `stscale health`).
+- `Dockerfile.integration` / `Dockerfile.integration-ci` — integration test images (debian-slim with `delve`, same volumes/ports/healthcheck for CI).
+- `goreleaser` `kos` builds `ghcr.io/tomiwebpro/stealthscale` for `linux/amd64` + `linux/arm64` (distroless `base-debian13` + `:debug` variant with busybox) with tags `latest`/`stable`/`unstable`/`v0.0.1-alpha.4`/`sha-*` (prerelease → `unstable`, stable → `latest+stable`).
+
+```shell
+# From GHCR (goreleaser kos)
+docker run --name stscale --detach --read-only --tmpfs /var/run/stealthscale \
+  --volume "$(pwd)/config:/etc/stealthscale:ro" --volume "$(pwd)/lib:/var/lib/stealthscale" \
+  --publish 8080:8080 --publish 9090:9090 --publish 10001-10100:10001-10100 --publish 3478:3478/udp \
+  ghcr.io/tomiwebpro/stealthscale:v0.0.1-alpha.4 serve
+docker exec stscale stscale health
+docker logs stscale
+
+# Manual build
+docker build -t stealthscale:local --build-arg VERSION=dev -f Dockerfile .
+docker run --rm stealthscale:local version
+```
+
+Requirements for Docker: mount `/var/lib/stealthscale` as a volume so `db.sqlite`, `noise_private.key`, `derp_server_private.key` and `.xray_secret` (Reality identity) persist across restarts — otherwise VLESS UUID/ports will change. For `postgres`, set `STEALTHSCALE_XRAY_SECRET` explicitly (no local file).
+
 ## Uninstall (all distributions — clean)
 
 - **Debian/Ubuntu deb**: `sudo apt remove stealthscale` (keep `/var/lib/stealthscale`) or `sudo apt purge stealthscale` (delete state, user). `packaging/deb/postrm:27 purge` removes data.
@@ -47,12 +69,13 @@ GOOS=windows GOARCH=amd64 go build -o stscale.exe ./cmd/stealthscale
 - **Windows**: `stscale uninstall [--purge]` or `powershell -ExecutionPolicy Bypass -File packaging/windows/uninstall.ps1 -Purge` (stops/deletes `StealthScale` service, removes `%ProgramFiles%\stealthscale`, `HKCU\...\Run`; `--purge` also `%ProgramData%\stealthscale`).
 - **Generic**: `stscale uninstall --help` (prompts, use `--yes`/`--force` to skip).
 
-## Next alpha
+## Platforms (alpha.4)
 
-`goreleaser` targets all OS/arch except Docker (`kos` stays disabled until native Windows+macOS are proven):
+`goreleaser` builds all native OS/arch plus Docker (kos enabled):
 
 ```
 linux_amd64, linux_arm64, linux_arm (6/7), darwin_amd64, darwin_arm64, windows_amd64, windows_arm64, freebsd_amd64, freebsd_arm64
++ docker: ghcr.io/tomiwebpro/stealthscale (linux/amd64, linux/arm64, distroless)
 ```
 
-`kos` will be re-enabled after native ports are stable.
+See `docs/setup/install/container.md` for container usage and `docs/about/versioning.md` for channel tags.

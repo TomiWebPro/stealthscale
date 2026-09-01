@@ -51,7 +51,7 @@ const (
 	stealthscaleDefaultPort          = 8080
 	IntegrationTestDockerFileName = "Dockerfile.integration"
 	defaultDirPerm                = 0o755
-	binStealthScale                  = "stealthscale"
+	binStealthScale                  = "stscale"
 	flagOutput                    = "--output"
 	acceptJSON                    = "Accept: application/json"
 )
@@ -317,8 +317,8 @@ func (hsic *StealthScaleInContainer) buildEntrypoint() []string {
 	// Update CA certificates
 	commands = append(commands, "update-ca-certificates")
 
-	// Run stealthscale serve
-	commands = append(commands, "/usr/local/bin/stealthscale serve")
+	// Run stscale serve (canonical binary; stealthscale symlink exists for compat)
+	commands = append(commands, "/usr/local/bin/stscale serve")
 
 	// Keep container alive after stealthscale exits for log collection
 	commands = append(commands, "/bin/sleep 30")
@@ -397,9 +397,9 @@ func New(
 	if hsic.postgres {
 		hsic.env["STEALTHSCALE_DATABASE_TYPE"] = "postgres"
 		hsic.env["STEALTHSCALE_DATABASE_POSTGRES_HOST"] = "postgres-" + hash
-		hsic.env["STEALTHSCALE_DATABASE_POSTGRES_USER"] = binStealthScale
-		hsic.env["STEALTHSCALE_DATABASE_POSTGRES_PASS"] = binStealthScale
-		hsic.env["STEALTHSCALE_DATABASE_POSTGRES_NAME"] = binStealthScale
+		hsic.env["STEALTHSCALE_DATABASE_POSTGRES_USER"] = "stealthscale"
+		hsic.env["STEALTHSCALE_DATABASE_POSTGRES_PASS"] = "stealthscale"
+		hsic.env["STEALTHSCALE_DATABASE_POSTGRES_NAME"] = "stealthscale"
 		delete(hsic.env, "STEALTHSCALE_DATABASE_SQLITE_PATH")
 
 		// Determine postgres image - use prebuilt if available, otherwise pull from registry
@@ -1036,7 +1036,7 @@ func (t *StealthScaleInContainer) CreateOAuthClient(
 	ctx context.Context,
 	scopes, tags []string,
 ) (string, string, error) {
-	apiKey, err := t.Execute([]string{"stealthscale", "apikeys", "create", "--expiration", "24h"})
+	apiKey, err := t.Execute([]string{binStealthScale, "apikeys", "create", "--expiration", "24h"})
 	if err != nil {
 		return "", "", fmt.Errorf("creating admin api key: %w", err)
 	}

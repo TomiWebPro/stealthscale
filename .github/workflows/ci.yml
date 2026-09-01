@@ -39,6 +39,21 @@ jobs:
           grep -q "nightly" hscontrol/db/versioncheck.go || (echo "isDev must handle nightly" && exit 1)
           test -f docs/about/versioning.md || (echo "versioning.md missing" && exit 1)
           echo "versioning checks ok"
+      - name: Check docker compatibility (alpha.4)
+        run: |
+          set -o pipefail
+          grep -q "^kos:" .goreleaser.yml || (echo "kos must be enabled for alpha.4 docker" && exit 1)
+          grep -q "ghcr.io/tomiwebpro/stealthscale" .goreleaser.yml || (echo "ghcr missing" && exit 1)
+          grep -q "gcr.io/distroless/base-debian13" .goreleaser.yml || (echo "distroless base missing" && exit 1)
+          test -f Dockerfile || (echo "Dockerfile missing for docker compat" && exit 1)
+          test -f Dockerfile.integration || (echo "Dockerfile.integration missing" && exit 1)
+          grep -q "HEALTHCHECK" Dockerfile || (echo "Dockerfile HEALTHCHECK missing" && exit 1)
+          grep -q "10001" Dockerfile || (echo "Dockerfile VLESS range missing" && exit 1)
+          grep -q "/var/lib/stealthscale" Dockerfile || (echo "Dockerfile volume missing" && exit 1)
+          grep -q 'binStealthScale.*=.*"stscale"' integration/hsic/hsic.go || (echo "hsic must use stscale binary for docker" && exit 1)
+          grep -q "/usr/local/bin/stscale serve" integration/hsic/hsic.go || (echo "hsic entrypoint must use stscale" && exit 1)
+          go test -run TestDocker -count=1 -v ./hscontrol -v
+          echo "docker compatibility checks ok"
 
   cross-build:
     runs-on: ubuntu-latest
@@ -86,9 +101,14 @@ jobs:
             grep -q -- "- $target" .goreleaser.yml || grep -q -- "\"$target\"" .goreleaser.yml || grep -q "$target" .goreleaser.yml || (echo "goreleaser missing $target" && exit 1)
           done
           cat .goreleaser.yml | grep -q "nfpms" || (echo "goreleaser missing nfpms deb" && exit 1)
+          cat .goreleaser.yml | grep -q "^kos:" || (echo "goreleaser missing kos for docker" && exit 1)
+          grep -q "ghcr.io/tomiwebpro/stealthscale" .goreleaser.yml || (echo "goreleaser ghcr missing" && exit 1)
+          grep -q "linux/amd64" .goreleaser.yml || (echo "kos linux/amd64 missing" && exit 1)
+          grep -q "linux/arm64" .goreleaser.yml || (echo "kos linux/arm64 missing" && exit 1)
           test -f packaging/launchd/com.stealthscale.plist || (echo "launchd plist missing" && exit 1)
           test -f packaging/windows/install.ps1 || (echo "windows install.ps1 missing" && exit 1)
-          echo "goreleaser multi-platform checks ok"
+          test -f Dockerfile || (echo "Dockerfile missing" && exit 1)
+          echo "goreleaser multi-platform + docker checks ok"
       - name: Path handling tests
         run: |
           set -o pipefail
@@ -103,6 +123,41 @@ jobs:
           go-version: '1.26.5'
       - name: VersionCheck test
         run: go test -run TestCheckVersionUpgradePath -count=1 ./hscontrol/db -v
+      - name: Goreleaser check (kos enabled)
+        run: |
+          go install github.com/goreleaser/goreleaser/v2@latest
+          goreleaser check --snapshot 2>&1 | tee /tmp/goreleaser-check.log
+          grep -q "kos" /tmp/goreleaser-check.log || echo "goreleaser check: kos not mentioned but ok if no error"
+          echo "goreleaser check ok"
+
+  docker-compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - name: Docker build verification
+        run: |
+          set -o pipefail
+          make build
+          test -x ./stscale || (echo "stscale binary not built" && exit 1)
+          ./stscale version || true
+          docker --version
+          docker build -f Dockerfile -t stealthscale:test --build-arg VERSION=test .
+          docker images stealthscale:test
+          docker build -f Dockerfile.integration -t stealthscale:integration-test .
+          echo "docker builds ok"
+      - name: Docker run smoke test
+        run: |
+          set -o pipefail
+          docker run --rm -d --name stealthscale-smoke -p 18080:8080 -p 19090:9090 stealthscale:test || (docker logs stealthscale-smoke; exit 1)
+          for i in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:18080/health && break || sleep 1; done
+          curl -sf http://127.0.0.1:18080/health | grep -q "databaseConnectivity" || (echo "health check failed"; docker logs stealthscale-smoke; exit 1)
+          docker exec stealthscale-smoke /usr/local/bin/stscale health || (docker logs stealthscale-smoke; exit 1)
+          docker exec stealthscale-smoke ls -la /var/lib/stealthscale || true
+          docker stop stealthscale-smoke || true
+          echo "docker smoke test ok"
 
   path-tests-windows:
     runs-on: windows-latest

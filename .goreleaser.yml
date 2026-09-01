@@ -17,7 +17,7 @@ builds:
   # Single unified binary: stscale is both coordinator and node.
   # There is no separate client binary — the same binary runs as client via `stscale up`
   # and as server via `stscale serve`. The VLESS+Reality transport is built in.
-  # Next alpha: all OS/arch except Docker (kos stays disabled until native ports proven).
+  # Alpha 4: Docker enabled via kos (distroless base) alongside all native OS/arch.
   # ARM 32-bit: linux_arm_6 (GOARM=6, Raspberry Pi Zero) and linux_arm_7 (GOARM=7, Pi 2/3/4 32-bit)
   # plus linux_arm (generic) for compatibility; ARM 64-bit via linux_arm64/darwin_arm64/windows_arm64.
   - id: stealthscale
@@ -42,8 +42,8 @@ builds:
       - -mod=readonly
 
 # Archives: binary for linux/freebsd; tar.gz/zip handled via binary naming
-# (goreleaser appends .exe for windows automatically). Windows/macOS native
-# without Docker — see packaging/launchd and packaging/windows.
+# (goreleaser appends .exe for windows automatically). Docker images via kos.
+# See packaging/launchd, packaging/windows and docs/setup/install/container.md.
 archives:
   - id: golang-cross
     name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}{{ with .Mips }}_{{ . }}{{ end }}{{ if not (eq .Amd64 "v1") }}{{ .Amd64 }}{{ end }}'
@@ -74,11 +74,10 @@ nfpms:
     maintainer: StealthScale authors
     homepage: https://github.com/tomiwebpro/stealthscale
     description: |-
-      Open source implementation of the Tailscale control server.
-      StealthScale replaces WireGuard with the VLESS+XRay+uTLS transport to
-      provide a self-hosted, open source alternative to the Tailscale control
-      server. It implements a narrow scope, a single Tailscale network (tailnet),
-      suitable for personal use, or a small open-source organisation.
+      StealthScale control server — open source Tailscale control server that replaces
+      WireGuard with the VLESS+XRay+uTLS (Reality) transport to provide a self-hosted,
+      stealth alternative. Implements a single tailnet for personal or small-org use.
+      Docker images via ghcr.io/tomiwebpro/stealthscale (distroless, linux/amd64,arm64).
     bindir: /usr/bin
     section: net
     formats:
@@ -107,59 +106,61 @@ nfpms:
         - no-manual-page
         - statically-linked-binary
 
-# kos disabled for alpha — no docker images until native Windows+macOS ready
-# To re-enable after native ports, uncomment kos section below.
-# kos:
-#   - id: ghcr
-#     repositories:
-#       - ghcr.io/tomiwebpro/stealthscale
-#     bare: true
-#     base_image: gcr.io/distroless/base-debian13
-#     build: stealthscale
-#     main: ./cmd/stealthscale
-#     env:
-#       - CGO_ENABLED=0
-#     platforms:
-#       - linux/amd64
-#       - linux/arm64
-#     tags:
-#       - "{{ if not .Prerelease }}latest{{ end }}"
-#       - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}.{{ .Patch }}{{ end }}"
-#       - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
-#       - "{{ if not .Prerelease }}{{ .Major }}{{ end }}"
-#       - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}.{{ .Patch }}{{ end }}"
-#       - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}{{ end }}"
-#       - "{{ if not .Prerelease }}v{{ .Major }}{{ end }}"
-#       - "{{ if not .Prerelease }}stable{{ else }}unstable{{ end }}"
-#       - "{{ .Tag }}"
-#       - '{{ trimprefix .Tag "v" }}'
-#       - "sha-{{ .ShortCommit }}"
-#     creation_time: "{{.CommitTimestamp}}"
-#     ko_data_creation_time: "{{.CommitTimestamp}}"
-#   - id: ghcr-debug
-#     repositories:
-#       - ghcr.io/tomiwebpro/stealthscale
-#     bare: true
-#     base_image: gcr.io/distroless/base-debian13:debug
-#     build: stealthscale
-#     main: ./cmd/stealthscale
-#     env:
-#       - CGO_ENABLED=0
-#     platforms:
-#       - linux/amd64
-#       - linux/arm64
-#     tags:
-#       - "{{ if not .Prerelease }}latest-debug{{ end }}"
-#       - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}.{{ .Patch }}-debug{{ end }}"
-#       - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}-debug{{ end }}"
-#       - "{{ if not .Prerelease }}{{ .Major }}-debug{{ end }}"
-#       - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}.{{ .Patch }}-debug{{ end }}"
-#       - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}-debug{{ end }}"
-#       - "{{ if not .Prerelease }}v{{ .Major }}-debug{{ end }}"
-#       - "{{ if not .Prerelease }}stable-debug{{ else }}unstable-debug{{ end }}"
-#       - "{{ .Tag }}-debug"
-#       - '{{ trimprefix .Tag "v" }}-debug'
-#       - "sha-{{ .ShortCommit }}-debug"
+# Docker images via ko (distroless) — enabled for alpha.4 (full docker compatibility).
+# Produces ghcr.io/tomiwebpro/stealthscale:{tag,unstable/stable,latest,sha} and :debug variants.
+# The base image is distroless (no shell in :latest, busybox in :debug). The binary is /ko-app/stscale.
+# Expose ports 8080 (control), 9090 (metrics), 3478/udp (STUN), 10001-10100 (VLESS Reality).
+kos:
+  - id: ghcr
+    repositories:
+      - ghcr.io/tomiwebpro/stealthscale
+    bare: true
+    base_image: gcr.io/distroless/base-debian13
+    build: stealthscale
+    main: ./cmd/stealthscale
+    env:
+      - CGO_ENABLED=0
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    tags:
+      - "{{ if not .Prerelease }}latest{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}.{{ .Patch }}{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}{{ end }}"
+      - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}.{{ .Patch }}{{ end }}"
+      - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if not .Prerelease }}v{{ .Major }}{{ end }}"
+      - "{{ if not .Prerelease }}stable{{ else }}unstable{{ end }}"
+      - "{{ .Tag }}"
+      - '{{ trimprefix .Tag "v" }}'
+      - "sha-{{ .ShortCommit }}"
+    creation_time: "{{.CommitTimestamp}}"
+    ko_data_creation_time: "{{.CommitTimestamp}}"
+  - id: ghcr-debug
+    repositories:
+      - ghcr.io/tomiwebpro/stealthscale
+    bare: true
+    base_image: gcr.io/distroless/base-debian13:debug
+    build: stealthscale
+    main: ./cmd/stealthscale
+    env:
+      - CGO_ENABLED=0
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    tags:
+      - "{{ if not .Prerelease }}latest-debug{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}.{{ .Patch }}-debug{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}-debug{{ end }}"
+      - "{{ if not .Prerelease }}{{ .Major }}-debug{{ end }}"
+      - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}.{{ .Patch }}-debug{{ end }}"
+      - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}-debug{{ end }}"
+      - "{{ if not .Prerelease }}v{{ .Major }}-debug{{ end }}"
+      - "{{ if not .Prerelease }}stable-debug{{ else }}unstable-debug{{ end }}"
+      - "{{ .Tag }}-debug"
+      - '{{ trimprefix .Tag "v" }}-debug'
+      - "sha-{{ .ShortCommit }}-debug"
 
 checksum:
   name_template: "checksums.txt"

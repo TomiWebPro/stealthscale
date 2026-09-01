@@ -4,19 +4,16 @@
 
     Development builds are from `main` and are **not versioned releases**. They track `xray.security:reality_xtls` via `github.com/xtls/reality` + `utls` and `xray.stealth.enforce:true` (fail-closed DERP). May contain breaking changes — test only. The authoritative setup is [StealthScale Install & deploy](../../stealthscale/install.md).
 
-Each push to `main` produces container images and cross-compiled binaries (`stscale` unified binary: `stscale serve` and `stscale up` same binary, `CGO_ENABLED=0`).
-
-!!! warning "Alpha: no Docker images yet — `kos` disabled in `.goreleaser.yml:110` until native Windows+macOS ready; use `make build` or `goreleaser build --snapshot`"
+Each push to `main` produces container images and cross-compiled binaries (`stscale` unified binary: `stscale serve` and `stscale up` same binary, `CGO_ENABLED=0`). Docker images are enabled for alpha.4 via `kos` (distroless).
 
 
-## Container images (multi-arch amd64/arm64, distroless)
+## Container images (multi-arch amd64/arm64, distroless — enabled for alpha.4)
 
-Tagged with short commit hash (`main-<sha>`):
-
-- `ghcr.io/tomiwebpro/stealthscale:main-<sha>` (canonical)
+- `ghcr.io/tomiwebpro/stealthscale:<VERSION>` via goreleaser `kos` (`main-<sha>`, `v0.0.1-alpha.4`, `unstable`, `sha-*`, `latest`/`stable` for prod)
+- `ghcr.io/tomiwebpro/stealthscale:main-<sha>` for dev (canonical)
 - `docker.io/stealthscale/stealthscale:main-<sha>` (legacy)
 
-Latest tag: [GitHub Actions workflow](https://github.com/tomiwebpro/stealthscale/actions/workflows/container-main.yml) or [GHCR package page](https://github.com/tomiwebpro/stealthscale/pkgs/container/stscale).
+Latest tag: [GitHub Releases](https://github.com/tomiwebpro/stealthscale/releases) or [GHCR package page](https://github.com/tomiwebpro/stealthscale/pkgs/container/stealthscale).
 
 ```shell
 docker run \
