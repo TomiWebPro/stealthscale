@@ -70,35 +70,49 @@ type realityUConn struct {
 // VerifyPeerCertificate is installed as utls.Config.VerifyPeerCertificate.
 // It checks the server's temporary ed25519 cert signature == HMAC-SHA512(pub, authKey).
 // When Show is false, no debug prints. On success sets verified=true.
+//
+// Note: Must NOT call c.ConnectionState() here — VerifyPeerCertificate is
+// invoked while the handshake holds the Conn mutex, so ConnectionState()
+// (which locks) deadlocks (see hscontrol/xray TestServerRealityTLSRoundTrip
+// 10m timeout with utls.Conn.ConnectionState mutex). Use rawCerts or the
+// unsafe peerCertificates field directly without locking.
 func (c *realityUConn) VerifyPeerCertificate(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 	if c == nil || c.UConn == nil {
 		return fmt.Errorf("reality: nil Conn")
 	}
-	// Prefer exported ConnectionState to avoid unsafe. This is safe across
-	// utls/crypto/tls version bumps and avoids reading wrong memory if
-	// peerCertificates field is renamed or layout changes.
-	if cs := c.ConnectionState(); len(cs.PeerCertificates) > 0 {
-		certs := cs.PeerCertificates
-		if pub, ok := certs[0].PublicKey.(ed25519.PublicKey); ok && len(c.authKey) > 0 {
-			h := hmac.New(sha512.New, c.authKey)
-			h.Write(pub)
-			if bytes.Equal(h.Sum(nil), certs[0].Signature) {
-				c.verified = true
-				return nil
+	// Fast path: parse rawCerts directly (avoids locking). rawCerts is
+	// provided by crypto/tls during verification and contains the same certs
+	// as ConnectionState.PeerCertificates would after handshake.
+	if len(rawCerts) > 0 {
+		certs := make([]*x509.Certificate, 0, len(rawCerts))
+		for _, asn1Data := range rawCerts {
+			cert, err := x509.ParseCertificate(asn1Data)
+			if err != nil {
+				continue
 			}
+			certs = append(certs, cert)
 		}
-		opts := x509.VerifyOptions{DNSName: c.serverName, Intermediates: x509.NewCertPool()}
-		for _, cert := range certs[1:] {
-			opts.Intermediates.AddCert(cert)
+		if len(certs) > 0 {
+			if pub, ok := certs[0].PublicKey.(ed25519.PublicKey); ok && len(c.authKey) > 0 {
+				h := hmac.New(sha512.New, c.authKey)
+				h.Write(pub)
+				if bytes.Equal(h.Sum(nil), certs[0].Signature) {
+					c.verified = true
+					return nil
+				}
+			}
+			opts := x509.VerifyOptions{DNSName: c.serverName, Intermediates: x509.NewCertPool()}
+			for _, cert := range certs[1:] {
+				opts.Intermediates.AddCert(cert)
+			}
+			if _, err := certs[0].Verify(opts); err != nil {
+				return err
+			}
+			return nil
 		}
-		if _, err := certs[0].Verify(opts); err != nil {
-			return err
-		}
-		return nil
 	}
-	// Fallback legacy reflection path — only if ConnectionState is empty
-	// (handshake not yet populated). Check ok to avoid panic/info-leak on
-	// field rename and avoid silently reading wrong offset.
+	// Fallback legacy reflection path — read peerCertificates without locking
+	// to avoid deadlock. Check ok to avoid panic/info-leak on field rename.
 	t := reflect.TypeOf(c.Conn)
 	if t == nil {
 		return fmt.Errorf("reality: nil Conn")
