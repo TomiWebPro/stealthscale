@@ -133,7 +133,7 @@ jobs:
         run: go test -run TestCheckVersionUpgradePath -count=1 ./hscontrol/db -v
       - name: Goreleaser check (kos enabled)
         run: |
-          go install github.com/goreleaser/goreleaser/v2@latest
+          go install github.com/goreleaser/goreleaser/v2@v2.17.1
           goreleaser check --snapshot 2>&1 | tee /tmp/goreleaser-check.log
           grep -q "kos" /tmp/goreleaser-check.log || echo "goreleaser check: kos not mentioned but ok if no error"
           echo "goreleaser check ok"
