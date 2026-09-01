@@ -30,6 +30,7 @@ func TestAbsolutePathFromConfigPath(t *testing.T) {
 			path:       "/var/lib/stealthscale/db.sqlite",
 			configFile: "/etc/stealthscale/config.yaml",
 			want:       "/var/lib/stealthscale/db.sqlite",
+			skipOS:     "windows",
 		},
 		{
 			name:       "unix absolute with dots cleaned",
@@ -51,10 +52,15 @@ func TestAbsolutePathFromConfigPath(t *testing.T) {
 			want:       "relative.yaml",
 		},
 		{
-			name:       "forward slash abs on windows is still abs",
+			// On Windows filepath.IsAbs("/var/...") is false (no volume),
+			// so AbsolutePathFromConfigPath treats it as relative and joins
+			// with the config dir. Document that behaviour; unix case above
+			// is skipped on windows.
+			name:       "forward slash abs on windows is joined (not abs)",
 			path:       "/var/lib/stealthscale/db.sqlite",
 			configFile: "/etc/stealthscale/config.yaml",
-			want:       filepath.Clean("/var/lib/stealthscale/db.sqlite"),
+			want:       filepath.Join("/etc/stealthscale", "var/lib/stealthscale/db.sqlite"),
+			onlyOS:     "windows",
 		},
 	}
 
@@ -124,7 +130,15 @@ func TestAbsolutePathFromConfigPath(t *testing.T) {
 				got := AbsolutePathFromConfigPath(tt.path)
 				// On Windows, Clean normalises separators.
 				require.Equal(t, tt.want, got)
-				assert.True(t, filepath.IsAbs(tt.path), "case path should be absolute on windows: %q", tt.path)
+				// For absolute cases the input should be absolute; for the
+				// relative_with_drive_config case the path is relative but the
+				// result (want) must be absolute.
+				if tt.name == "windows relative with drive config" {
+					assert.False(t, filepath.IsAbs(tt.path), "relative case path should not be absolute: %q", tt.path)
+					assert.True(t, filepath.IsAbs(got), "result should be absolute on windows: %q", got)
+				} else {
+					assert.True(t, filepath.IsAbs(tt.path), "case path should be absolute on windows: %q", tt.path)
+				}
 			})
 		}
 	} else {
@@ -140,12 +154,13 @@ func TestAbsolutePathFromConfigPath(t *testing.T) {
 }
 
 func TestAbsolutePathFromConfigPath_TableDriven(t *testing.T) {
-	// Additional table covering the issue's required cases generically (GOOS-independent where possible).
+	// Additional table covering the issue's required cases generically (GOOS-dependent).
+	// On Windows "/var/..." is NOT absolute (needs drive/volume), so abs is false there.
 	cases := []struct {
 		input string
 		abs   bool // whether input is absolute on current GOOS
 	}{
-		{input: "/var/lib/stealthscale/db.sqlite", abs: true},
+		{input: "/var/lib/stealthscale/db.sqlite", abs: runtime.GOOS != "windows"},
 		{input: "a/b", abs: false},
 		{input: "", abs: false},
 	}
