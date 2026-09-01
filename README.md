@@ -29,14 +29,22 @@ ordinary TLS to a network observer.
 
 ## How it works
 
-```
-        +-------------------- unified StealthScale node (same binary) -------------------+
-        |  coordination (embedded)  <----- VLESS+Reality ----->  coordination (peer)    |
-        |        ^   |                                  ^                             |
-        |        |   | (this node is also a node)         | (peer is also a node)        |
-        |        +---+------------------------------------+-----------------------------+
-        |  data plane: node <-> node over VLESS stealth (noise inside)                  |
-        +------------------------------------------------------------------------------+
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│  stscale — one binary, every device is a node                           │
+│                                                                         │
+│  ┌─────────────────────────┐  VLESS + Reality + uTLS  ┌────────────────┐ │
+│  │  coordination (embedded)│◄────────────────────────►│ coordination   │ │
+│  │  API · policy · IPAM    │     stealth control      │ (peer, any     │ │
+│  └────────────┬────────────┘                          │  node can be   │ │
+│               │ this node is also a peer              │  coordinator)  │ │
+│               └───────────────────────────────────────┴────────────────┘ │
+│                                                                         │
+│  data plane:  node ◄──────── VLESS stealth (noise inside) ────────► node │
+│                                                                         │
+│  any node may coordinate — no privileged role, always-on coordinator    │
+│  is recommended for reliability.                                        │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 Every device runs the **same binary**. Each is a *node*. Any node may act as the
@@ -148,18 +156,6 @@ operations. The current embedded UI is read-only (see
 [docs/stealthscale/overview.md](docs/stealthscale/overview.md) → *Current
 status*); closing that gap is a core goal.
 
-## Documentation
-
-The full docs live in [`docs/`](docs/) (MkDocs):
-
-- [StealthScale overview](docs/stealthscale/overview.md)
-- [Install & deploy](docs/stealthscale/install.md)
-- [Connecting a patched client](docs/stealthscale/clients.md)
-- [XRay/VLESS reference](docs/ref/xray-vless.md)
-- [Client modification guide](docs/client-modification.md)
-- [Configuration reference](docs/ref/configuration.md)
-- [Web UI usage](docs/usage/webui.md)
-
 ## Development
 
 Requires Go 1.26.1+. The repo ships a Nix dev shell and pre-commit hooks
@@ -177,13 +173,15 @@ protocol with a raw VLESS client.
 
 ## Documentation
 
+The full docs live in [`docs/`](docs/) (MkDocs):
+
 - [StealthScale overview](docs/stealthscale/overview.md)
-- [Install & deploy](docs/stealthscale/install.md) — including
-  [Upgrading from Headscale](docs/stealthscale/install.md#upgrading-from-headscale--old-stealthscale)
-- [Threat model](docs/ref/threat-model.md) — what Reality hides, what `enforce_control:false` still exposes, `ShortId`/`ServerNames` enumeration, `xray.secret` handling
+- [Install & deploy](docs/stealthscale/install.md) — including [Upgrading from Headscale](docs/stealthscale/install.md#upgrading-from-headscale--old-stealthscale)
+- [Threat model](docs/ref/threat-model.md) — what Reality hides, `enforce_control`, `ShortId`/`ServerNames`, `xray.secret`
 - [XRay/VLESS reference](docs/ref/xray-vless.md)
+- [Configuration reference](docs/ref/configuration.md)
+- [Web UI usage](docs/usage/webui.md)
 - [Client modification guide](docs/client-modification.md)
-- [Web UI usage](docs/usage/webui.md) — hardening (`enforce_control:true` → `401` without API key)
 
 ## License
 
