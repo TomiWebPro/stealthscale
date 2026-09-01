@@ -63,8 +63,8 @@ full architecture.
 
 ## Compatibility
 
-!!! danger "No Tailscale compatibility"
-    StealthScale has **no compatibility layer** and is **not intended to be compatible** with stock Tailscale clients, Tailscale control servers, or Headscale. WireGuard is fully replaced by Xray/VLESS+Reality; there is no fallback or translation mode. Do not attempt to connect stock `tailscale` binaries.
+> [!CAUTION]
+> **No Tailscale compatibility — StealthScale has no compatibility layer and is not intended to be compatible** with stock Tailscale clients, Tailscale control servers, or Headscale. WireGuard is fully replaced by Xray/VLESS+Reality; there is no fallback or translation mode. Do not attempt to connect stock `tailscale` binaries.
 
 You need:
 
