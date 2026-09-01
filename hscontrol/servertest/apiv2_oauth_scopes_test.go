@@ -344,7 +344,9 @@ func newTofuOAuth(t *testing.T, baseURL, clientID, clientSecret, config string) 
 	t.Helper()
 
 	bin, err := exec.LookPath("tofu")
-	require.NoErrorf(t, err, "tofu is required for TestAPIv2OAuthScopes (provided by the nix dev shell)")
+	if err != nil {
+		t.Skipf("tofu not found in $PATH, skipping TestAPIv2OAuthScopes (install opentofu or run via nix develop): %v", err)
+	}
 
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.tf"), []byte(config), 0o600))

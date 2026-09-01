@@ -373,7 +373,17 @@ func loadOrCreateSecret(stateDir string) (string, error) {
 		return hex.EncodeToString(b), nil
 	}
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return "", err
+		// In restricted environments (e.g. CI runners without permission to
+		// create /var/lib/stealthscale) fall back to an ephemeral secret
+		// rather than failing the entire config load. The fallback is
+		// logged and still produces a valid identity; callers that need a
+		// stable identity should set xray.secret explicitly.
+		log.Warn().Err(err).Str("path", stateDir).Msg("xray secret: cannot create state dir, using ephemeral secret")
+		b := make([]byte, 32)
+		if _, err2 := rand.Read(b); err2 != nil {
+			return "", err2
+		}
+		return hex.EncodeToString(b), nil
 	}
 	p := filepath.Join(stateDir, ".xray_secret")
 	if data, err := os.ReadFile(p); err == nil {

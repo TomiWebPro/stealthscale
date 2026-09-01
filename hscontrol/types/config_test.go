@@ -248,6 +248,14 @@ func TestReadConfig(t *testing.T) {
 			err := LoadConfig(tt.configPath, true)
 			require.NoError(t, err)
 
+			// Isolate xray identity from the host filesystem so the test
+			// never tries to mkdir /var/lib/stealthscale (which fails in
+			// restricted CI runners). Use a temp dir for the sqlite path
+			// and an explicit secret so loadOrCreateSecret never touches
+			// the filesystem.
+			viper.Set("database.sqlite.path", filepath.Join(t.TempDir(), "db.sqlite"))
+			viper.Set("xray.secret", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
 			conf, err := tt.setup(t)
 
 			if tt.wantErr != "" {

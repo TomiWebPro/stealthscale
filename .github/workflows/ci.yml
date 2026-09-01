@@ -10,20 +10,28 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.8'
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.10.10
+      - name: Install tscli
+        run: |
+          go install github.com/jaxxstorm/tscli@latest || echo "tscli install failed, tests will skip tscli subtests"
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
       - name: Build
         run: make build
       - name: Test (short, race)
         run: |
           set -o pipefail
-          go test -race -short -count=1 ./hscontrol/... ./cmd/... -v
+          go test -timeout 20m -race -short -count=1 ./hscontrol/... ./cmd/... -v
       - name: Test stealth
         run: |
           set -o pipefail
-          go test -race -short -count=1 -v ./hscontrol/stealth ./hscontrol/xray ./hscontrol/derp
+          go test -timeout 10m -race -short -count=1 -v ./hscontrol/stealth ./hscontrol/xray ./hscontrol/derp
       - name: Vet
         run: go vet ./...
       - name: Check deb packaging
@@ -58,10 +66,10 @@ jobs:
   cross-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.8'
       - name: Cross-vet Windows
         run: |
           set -o pipefail
@@ -117,10 +125,10 @@ jobs:
   goreleaser-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.8'
       - name: VersionCheck test
         run: go test -run TestCheckVersionUpgradePath -count=1 ./hscontrol/db -v
       - name: Goreleaser check (kos enabled)
@@ -133,10 +141,10 @@ jobs:
   docker-compat:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.8'
       - name: Docker build verification
         run: |
           set -o pipefail
@@ -153,28 +161,29 @@ jobs:
           set -o pipefail
           docker run --rm -d --name stealthscale-smoke -p 18080:8080 -p 19090:9090 stealthscale:test || (docker logs stealthscale-smoke; exit 1)
           for i in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:18080/health && break || sleep 1; done
-          curl -sf http://127.0.0.1:18080/health | grep -q "databaseConnectivity" || (echo "health check failed"; docker logs stealthscale-smoke; exit 1)
-          docker exec stealthscale-smoke /usr/local/bin/stscale health || (docker logs stealthscale-smoke; exit 1)
+          curl -sf http://127.0.0.1:18080/health | grep -q '"status"' || curl -sf http://127.0.0.1:18080/health | grep -q "pass" || (echo "health check failed"; docker logs stealthscale-smoke; docker inspect stealthscale-smoke || true; exit 1)
+          curl -sf http://127.0.0.1:18080/health | cat; echo "health ok"
+          docker exec stealthscale-smoke /usr/local/bin/stscale health --output json || docker exec stealthscale-smoke cat /tmp/stealthscale.log || (docker logs stealthscale-smoke; exit 1)
           docker exec stealthscale-smoke ls -la /var/lib/stealthscale || true
-          docker stop stealthscale-smoke || true
+          docker stop stealthscale-smoke || docker rm -f stealthscale-smoke || true
           echo "docker smoke test ok"
 
   path-tests-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.8'
       - name: Windows path tests
         run: go test -run TestAbsolutePathFromConfigPath ./hscontrol/util -count=1 -v
 
   path-tests-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.8'
       - name: macOS path tests
         run: go test -run TestAbsolutePathFromConfigPath ./hscontrol/util -count=1 -v

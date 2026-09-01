@@ -45,7 +45,11 @@ func TestStressConnectDisconnect(t *testing.T) {
 			})
 
 		// Do 10 rapid reconnects and check that client 0 never
-		// sees client 1 as offline during the process.
+		// sees client 1 as offline during the process. The grace period
+		// should keep the peer online even during brief disconnects.
+		// To reduce flakiness on loaded CI runners, we wait for the peer
+		// to be seen online between each cycle and add a small poll
+		// interval to the monitor.
 		sawOffline := false
 
 		var offlineMu sync.Mutex
@@ -66,6 +70,7 @@ func TestStressConnectDisconnect(t *testing.T) {
 
 				nm := h.Client(0).Netmap()
 				if nm == nil {
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 
@@ -77,12 +82,26 @@ func TestStressConnectDisconnect(t *testing.T) {
 						offlineMu.Unlock()
 					}
 				}
+				time.Sleep(10 * time.Millisecond)
 			}
 		}()
 
 		for range 10 {
 			h.Client(1).Disconnect(t)
 			h.Client(1).Reconnect(t)
+			// Wait for peer to be online again before next cycle to
+			// avoid stacking disconnects faster than the poll can
+			// observe the graceful reconnect.
+			h.Client(0).WaitForCondition(t, "peer online after reconnect", 5*time.Second,
+				func(nm *netmap.NetworkMap) bool {
+					for _, p := range nm.Peers {
+						isOnline, known := p.Online().GetOk()
+						if known && isOnline {
+							return true
+						}
+					}
+					return false
+				})
 		}
 
 		// Give the monitor a moment to catch up, then stop it.
