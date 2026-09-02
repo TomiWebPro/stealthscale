@@ -6,6 +6,10 @@ before:
     - go mod vendor
 
 release:
+  # Three-channel model: nightly (dev, isDev=true), alpha (prerelease, isDev=false),
+  # stable (production). `auto` maps nightly/alpha -> prerelease=true, stable -> false.
+  # Plain tags `nightly`/`alpha`/`stable` are also treated as prerelease/stable via
+  # the kos tagging below (stable/unstable/nightly).
   prerelease: auto
   draft: true
   header: |
@@ -132,6 +136,13 @@ kos:
       - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}{{ end }}"
       - "{{ if not .Prerelease }}v{{ .Major }}{{ end }}"
       - "{{ if not .Prerelease }}stable{{ else }}unstable{{ end }}"
+      # Three-channel floating tags: nightly (dev), alpha (prerelease), stable (prod)
+      - '{{ if eq .Tag "nightly" }}nightly{{ end }}'
+      - '{{ if eq .Tag "nightly" }}unstable{{ end }}'
+      - '{{ if eq .Tag "alpha" }}alpha{{ end }}'
+      - '{{ if eq .Tag "alpha" }}unstable{{ end }}'
+      - '{{ if eq .Tag "stable" }}stable{{ end }}'
+      - '{{ if eq .Tag "stable" }}latest{{ end }}'
       - "{{ .Tag }}"
       - '{{ trimprefix .Tag "v" }}'
       - "sha-{{ .ShortCommit }}"
@@ -158,6 +169,12 @@ kos:
       - "{{ if not .Prerelease }}v{{ .Major }}.{{ .Minor }}-debug{{ end }}"
       - "{{ if not .Prerelease }}v{{ .Major }}-debug{{ end }}"
       - "{{ if not .Prerelease }}stable-debug{{ else }}unstable-debug{{ end }}"
+      - '{{ if eq .Tag "nightly" }}nightly-debug{{ end }}'
+      - '{{ if eq .Tag "nightly" }}unstable-debug{{ end }}'
+      - '{{ if eq .Tag "alpha" }}alpha-debug{{ end }}'
+      - '{{ if eq .Tag "alpha" }}unstable-debug{{ end }}'
+      - '{{ if eq .Tag "stable" }}stable-debug{{ end }}'
+      - '{{ if eq .Tag "stable" }}latest-debug{{ end }}'
       - "{{ .Tag }}-debug"
       - '{{ trimprefix .Tag "v" }}-debug'
       - "sha-{{ .ShortCommit }}-debug"

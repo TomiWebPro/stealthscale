@@ -4,14 +4,14 @@ This page is the **source of truth** for StealthScale version strings. Future ag
 
 `GetVersionInfo().Version` comes from `debug.ReadBuildInfo.Main.Version` (the goreleaser tag or Go pseudo-version). `hscontrol/db/versioncheck.go:parseVersion` strips prerelease and build metadata (`-xxx`, `+yyy`) and parses `MAJOR.MINOR.PATCH`. `isDev` decides if the version is a development build that skips the DB version check.
 
-## The four channels
+## The three channels
 
 | Channel | Git tag / version string | Example | `isDev` | Writes `database_versions`? | Goreleaser `prerelease` | Docker tag | APT repo | Upgrade guard |
 |---|---|---|---|---|---|---|---|
 | **dev** (local) | none — `make build` | `dev` or `v0.0.1-5-g944d522-dirty` | **yes** | no (preserves stored version) | n/a (snapshot `-next`) | none | none | skipped |
-| **nightly** | `vX.Y.Z-nightly.YYYYMMDD` or snapshot `vX.Y.Z-next` / pseudo `v0.0.0-YYYYMMDDHHMMSS-abc123` | `v0.0.1-nightly.20260831+g944d522` <br>snapshot: `v0.0.1-next` | **yes** | **no** | yes (if tagged) / n/a (snapshot) | `ghcr.io/tomiwebpro/stealthscale:nightly` <br>`unstable` | `unstable` | skipped |
-| **alpha / beta / rc** | `vX.Y.Z-alpha.N` `vX.Y.Z-beta.N` `vX.Y.Z-rc.N` | `v0.0.1-alpha.1` <br>`v0.0.1-rc.1` | **no** | **yes** (`X.Y.Z` core) | yes (`prerelease: auto`) | `ghcr.io/...:alpha`, `sha-...` | `unstable` | enforces `MINOR` of core (strips prerelease) |
-| **production** | `vX.Y.Z` | `v0.0.1` `v1.0.0` | **no** | **yes** | no | `ghcr.io/...:stable`, `latest`, `v0.0.1`, `sha-...` | `stable` | enforces one-minor |
+| **nightly** | `nightly` (floating) + `vX.Y.Z-nightly.YYYYMMDD` or snapshot `vX.Y.Z-next` | `nightly` → `v0.0.1-nightly.20260831+g944d522` <br>snapshot: `v0.0.1-next` | **yes** | **no** | yes (if tagged) / n/a (snapshot) | `ghcr.io/tomiwebpro/stealthscale:nightly` <br>`unstable` | `unstable` | skipped |
+| **alpha** | `alpha` (floating) consolidates all `vX.Y.Z-alpha.N` history | `alpha` → `v0.0.1-alpha` (was `alpha.1..4`) | **no** | **yes** (`X.Y.Z` core) | yes (`prerelease: auto`) | `ghcr.io/...:alpha`, `sha-...` | `unstable` | enforces `MINOR` of core |
+| **stable** | `stable` (floating) + `vX.Y.Z` | `stable` → `v0.0.1` <br>`v1.0.0` | **no** | **yes** | no | `ghcr.io/...:stable`, `latest`, `v0.0.1`, `sha-...` | `stable` | enforces one-minor |
 
 > **Fresh start (2026-08-31):** StealthScale restarts versioning at `v0.0.1` — not a small Headscale fork. Headscale `0.29.x/0.30.0` history is archived in `CHANGELOG.md`. New installs start at `0.0.1`; upgrades from Headscale DBs are not supported without manual migration.
 
@@ -40,30 +40,33 @@ We use **Semantic Versioning 2.0.0**: `vMAJOR.MINOR.PATCH[-PRERELEASE][+BUILD]`
 ## Branching to channels
 
 ```
-main  ──► nightly (daily 02:00 UTC, schedule) ──► alpha tag ──► rc/beta ──► prod tag
-         snapshot -next (on every push)        v0.0.1-alpha.1   v0.0.1-rc.1  v0.0.1
+main  ──► nightly (daily 02:00 UTC, schedule) ──► alpha (floating) ──► stable (floating)
+         snapshot -next (on every push)        alpha              stable / v0.0.1
+                                            (was alpha.1..4)
 ```
+
+> **Consolidation 2026-09-02:** `v0.0.1-alpha.1..4` squashed into single floating `alpha` tag (see `git tag`). Use `alpha` for all alpha releases; `nightly`/`stable` are the other two channels. No versioned alpha.N tags remain.
 
 ### Nightly
 
-- **Trigger:** GitHub Actions `schedule: cron '0 2 * * *'` on `main` plus `push` to `main` snapshot. No git tag; `goreleaser build --snapshot` produces `v<latest-tag>-next` (or nightly workflow creates tag `vNEXT-nightly.YYYYMMDD` and runs `goreleaser release --clean` with `prerelease:true`).
-- **Version examples:** `v0.31.0-nightly.20260831`, `v0.31.0-nightly.20260831+g54add2b`, or local pseudo `v0.0.0-20260831120000-54add2b123456`
+- **Trigger:** `git tag nightly && git push -f origin nightly` (floating, moves daily) or `schedule: cron '0 2 * * *'` on `main`; `push` to `main` snapshot `goreleaser build --snapshot` → `v<latest-tag>-next`. Release workflow now also triggers on `nightly` tag (`release.yml: tags: ['v*', 'stable', 'alpha', 'nightly']`).
+- **Version examples:** `nightly` → `v0.0.1-nightly.20260902+g944d522`, or local pseudo `v0.0.0-20260902120000-54add2b123456`
 - **Artifacts:** Linux `stscale` binary, `stscale_*_linux_*.deb`, `ghcr.io/tomiwebpro/stealthscale:nightly` / `unstable` / `sha-…`
 - **DB:** `isDev=true` → never writes `database_versions`, never blocks upgrade. Safe to run against a copy of prod DB for testing.
 - **Purpose:** First Linux binary testing, integration, stealth verification. **Do not use as production control plane.**
 
-### Alpha / Beta / RC
+### Alpha
 
-- **Trigger:** manual `git tag v0.31.0-alpha.1 && git push origin v0.31.0-alpha.1` (alpha), `-beta.1`, `-rc.1`.
-- **Goreleaser:** `prerelease: auto` marks it as GitHub prerelease. Changelog auto-grouped, `stable: false` docker tags (`stable` not pushed).
-- **DB:** `isDev=false` → writes `database_versions` as core `0.31.0` after migrations. Upgrade from previous stable `0.30.x` to alpha is `minorDiff==1` → allowed; alpha to `0.31.0` stable is `minorDiff==0` → allowed. Downgrade alpha→stable not blocked (same core), but `0.31.0`→`0.30.x` is blocked.
+- **Trigger:** `git tag alpha && git push -f origin alpha` (floating, consolidates former `v0.0.1-alpha.1..4`; next alpha moves the tag with `-f`).
+- **Goreleaser:** `prerelease: auto` → true (floating `alpha` treated as prerelease via kos `unstable`), GitHub prerelease, `ghcr.io/...:alpha`, `sha-...`.
+- **DB:** `isDev=false` (plain `alpha` is **not** dev; see `versioncheck.go:isDev` must not match `alpha` — only `nightly`/`-next`/`dirty`/`-g`) → writes `database_versions` as `0.0.1` core.
 - **Purpose:** Test the migration path and breaking changes with real users on `unstable` repo.
 
-### Production
+### Stable
 
-- **Trigger:** `git tag v0.31.0 && git push origin v0.31.0` (no prerelease suffix).
-- **Goreleaser:** `prerelease: auto` → `false`, `draft: true` (then undrafted manually), `latest`/`stable` docker tags, `stable` APT.
-- **DB:** `isDev=false` → stores exact `v0.31.0`, enforces one-minor path: `0.29.x→0.30.0` allowed, `0.28→0.30` blocked with message to upgrade to `0.29.x` first.
+- **Trigger:** `git tag stable && git push -f origin stable` (+ optional semver `git tag v0.1.0 && git push origin v0.1.0` for changelog). Release workflow triggers on `stable`.
+- **Goreleaser:** `prerelease: auto` → `false`, `draft: true` (then undrafted), `latest`/`stable` docker tags, `stable` APT.
+- **DB:** `isDev=false` → stores exact `v0.1.0` or `stable` core, enforces one-minor path.
 - **CHANGELOG:** Must have `## X.Y.Z (YYYY-MM-DD)` entry with `### BREAKING` if needed (see `docs/setup/upgrade.md`).
 
 ### Dev / Snapshot (`-next`, `+gSHA`, `-dirty`)
@@ -85,34 +88,30 @@ main  ──► nightly (daily 02:00 UTC, schedule) ──► alpha tag ──�
 
 ## How to cut each release
 
-### Nightly (automated)
+### Nightly (floating)
 
 ```bash
-# No tag needed — CI does on schedule:
-# .github/workflows/nightly.yml → goreleaser build --snapshot  → upload to :nightly
-# Manual nightly tag (if you want a GitHub prerelease):
-git tag v0.31.0-nightly.20260831
-git push origin v0.31.0-nightly.20260831  # goreleaser → prerelease, ghcr :nightly
+git tag nightly && git push -f origin nightly  # moves nightly
+# goreleaser → ghcr :nightly / :unstable / sha-... (prerelease, isDev=true)
 ```
 
-### Alpha
+### Alpha (floating, replaces alpha.1..4)
 
 ```bash
-# Bump next minor, create prerelease tag
-git tag v0.31.0-alpha.1
-git push origin v0.31.0-alpha.1
-# goreleaser → GitHub prerelease, ghcr :alpha, apt unstable
-# Test upgrade: restore 0.30.0 dump, run alpha binary, check migrations
+git tag alpha && git push -f origin alpha  # consolidates 4 tags
+# To move to next alpha:
+git tag -f alpha && git push -f origin alpha
+# goreleaser → GitHub prerelease, ghcr :alpha / :unstable, apt unstable
 ```
 
-### Production
+### Stable (floating)
 
 ```bash
-# 1. Update CHANGELOG.md: ## 0.31.0 (2026-09-01) with breaking notes
+# 1. Update CHANGELOG.md: ## 0.1.0 (2026-09-02) with breaking notes
 # 2. Update docs/about/versioning.md if convention changes
 # 3. Commit, then tag
-git tag v0.31.0
-git push origin v0.31.0
+git tag stable && git push -f origin stable
+git tag v0.1.0 && git push origin v0.1.0  # optional semver for history
 # goreleaser → stable release, ghcr :stable/:latest, apt stable
 # 4. Verify stscale nodes vless 1 identical before/after
 ```

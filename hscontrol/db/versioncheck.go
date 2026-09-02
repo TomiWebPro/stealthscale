@@ -49,9 +49,21 @@ func (s semver) String() string {
 // parseVersion parses a version string like "v0.25.0", "0.25.1",
 // "v0.25.0-beta.1", or "v0.25.0-rc1+build123" into its major, minor,
 // patch components. Pre-release and build metadata suffixes are stripped.
+// Floating channel tags `alpha`/`stable`/`nightly` (2026-09-02 consolidation
+// from v0.0.1-alpha.1..4) are mapped to v0.0.1 for upgrade-path checks.
 func parseVersion(s string) (semver, error) {
 	if s == "" || s == "dev" {
 		return semver{}, fmt.Errorf("%q: %w", s, errVersionParse)
+	}
+
+	// Floating channels without semver: map to v0.0.1 core.
+	// nightly is normally isDev=true (skipped), but handle plain string
+	// for completeness if isDev check is bypassed.
+	switch s {
+	case "alpha", "stable", "nightly":
+		return semver{Major: 0, Minor: 0, Patch: 1}, nil
+	case "v0.0.1-alpha", "v0.0.1-nightly", "v0.0.1-stable":
+		return semver{Major: 0, Minor: 0, Patch: 1}, nil
 	}
 
 	v := strings.TrimPrefix(s, "v")
