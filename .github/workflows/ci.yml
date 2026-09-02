@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.8'
+          go-version: '1.26.7'
       - name: Setup OpenTofu
         uses: opentofu/setup-opentofu@v1
         with:
@@ -69,7 +69,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.8'
+          go-version: '1.26.7'
       - name: Cross-vet Windows
         run: |
           set -o pipefail
@@ -128,7 +128,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.8'
+          go-version: '1.26.7'
       - name: VersionCheck test
         run: go test -run TestCheckVersionUpgradePath -count=1 ./hscontrol/db -v
       - name: Goreleaser check (kos enabled)
@@ -144,7 +144,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.8'
+          go-version: '1.26.7'
       - name: Docker build verification
         run: |
           set -o pipefail
@@ -174,7 +174,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.8'
+          go-version: '1.26.7'
       - name: Windows path tests
         run: go test -run TestAbsolutePathFromConfigPath ./hscontrol/util -count=1 -v
 
@@ -184,6 +184,6 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.8'
+          go-version: '1.26.7'
       - name: macOS path tests
         run: go test -run TestAbsolutePathFromConfigPath ./hscontrol/util -count=1 -v

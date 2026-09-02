@@ -5,7 +5,7 @@
 # This is a modified version of the server that uses Xray/VLESS for
 # node-to-node communication to bypass network restrictions.
 
-FROM docker.io/golang:1.26.8-trixie AS builder
+FROM docker.io/golang:1.26.7-trixie AS builder
 ARG VERSION=dev
 ENV GOPATH /go
 WORKDIR /go/src/stealthscale

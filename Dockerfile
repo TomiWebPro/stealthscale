@@ -4,7 +4,7 @@
 # and with a production-oriented runtime (non-root `stealthscale` user, volume declarations,
 # healthcheck, and the full VLESS port range).
 
-FROM docker.io/golang:1.26.8-trixie AS builder
+FROM docker.io/golang:1.26.7-trixie AS builder
 ARG VERSION=dev
 WORKDIR /src
 
