@@ -1,6 +1,7 @@
 package hscontrol
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -454,16 +456,22 @@ func (ns *noiseServer) SSHActionHandler(
 		return
 	}
 
-	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	writer.WriteHeader(http.StatusOK)
-
-	err = json.NewEncoder(writer).Encode(action)
-	if err != nil {
+	buf := &bytes.Buffer{}
+	if err := json.NewEncoder(buf).Encode(action); err != nil {
 		reqLog.Error().Caller().Err(err).
 			Msg("failed to encode SSH action response")
 
+		httpError(writer, NewHTTPError(
+			http.StatusInternalServerError, "json encode failed", err,
+		))
+
 		return
 	}
+
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.Header().Set("Content-Length", strconv.FormatInt(int64(buf.Len()), 10))
+	writer.WriteHeader(http.StatusOK)
+	_, _ = buf.WriteTo(writer)
 
 	if flusher, ok := writer.(http.Flusher); ok {
 		flusher.Flush()

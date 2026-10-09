@@ -1,15 +1,20 @@
 # StealthScale Makefile — see AGENTS.md Quick Start for usage
 VERSION ?= dev
 PIE_FLAGS ?=
+# Project declares go 1.26.7 in go.mod:3. Pin GOTOOLCHAIN so local
+# toolchains newer than 1.26.7 don't surface incompatibilities
+# (e.g. encoding/json treating `format:` as fatal).
+GOTOOLCHAIN ?= go1.26.7
 
 .PHONY: build test fmt lint generate dev clean
 
 build:
-	@echo "Building stscale..."
-	go build $(PIE_FLAGS) -ldflags "-X main.version=$(VERSION)" -o stscale ./cmd/stealthscale
+	@echo "Building stscale (toolchain $(GOTOOLCHAIN))..."
+	GOTOOLCHAIN=$(GOTOOLCHAIN) go build $(PIE_FLAGS) \
+		-ldflags "-X main.version=$(VERSION)" -o stscale ./cmd/stealthscale
 
 test:
-	go test -race -short -count=1 ./...
+	GOTOOLCHAIN=$(GOTOOLCHAIN) go test -race -short -count=1 ./...
 
 fmt:
 	gofumpt -w .
