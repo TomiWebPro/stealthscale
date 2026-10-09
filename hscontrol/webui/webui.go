@@ -39,6 +39,7 @@ type State interface {
 	GetPolicy() (*types.Policy, error)
 	DERPMap() tailcfg.DERPMapView
 	PingDB(ctx context.Context) error
+	ElectionSnapshot() map[string]any
 	// Optional writes (implemented by *state.State):
 	// CreateUser(types.User) (*types.User, change.Change, error)
 	// DeleteNode(types.NodeView) (change.Change, error)
@@ -227,6 +228,7 @@ func Handler(cfg *types.Config, st State) http.Handler {
 	apiDERP := func(w http.ResponseWriter, r *http.Request) { handleDERP(w, r, cfg, st) }
 	apiVLESS := func(w http.ResponseWriter, r *http.Request) { handleVLESS(w, r, cfg) }
 	apiHealth := func(w http.ResponseWriter, r *http.Request) { handleHealth(w, r, cfg, st) }
+	apiElection := func(w http.ResponseWriter, r *http.Request) { handleElection(w, r, cfg, st) }
 
 	for _, prefix := range []string{"/web/api", "/admin/api"} {
 		mux.HandleFunc(prefix+"/nodes", requireAuth(apiNodes))
@@ -239,6 +241,7 @@ func Handler(cfg *types.Config, st State) http.Handler {
 		mux.HandleFunc(prefix+"/derp", requireAuth(apiDERP))
 		mux.HandleFunc(prefix+"/vless/", requireAuth(apiVLESS)) // /vless/{id}
 		mux.HandleFunc(prefix+"/health", requireAuth(apiHealth))
+		mux.HandleFunc(prefix+"/election", requireAuth(apiElection))
 		// Also support without trailing slash for vless
 		mux.HandleFunc(prefix+"/vless", requireAuth(apiVLESS))
 	}
@@ -649,4 +652,38 @@ func handleDeleteNode(w http.ResponseWriter, r *http.Request, st State) {
 	}
 	// Stub
 	writeJSON(w, map[string]any{"status": "deleted (stub)", "nodeID": nodeID.String()})
+}
+
+func handleElection(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State) {
+	switch r.Method {
+	case http.MethodGet:
+		snap := st.ElectionSnapshot()
+		if snap == nil {
+			snap = map[string]any{"mode": "", "primary_node": "", "has_primary": false}
+		}
+		// Attach config context for operator awareness.
+		snap["xray_enabled"] = cfg.XRay.Enabled
+		writeJSON(w, snap)
+
+	case http.MethodPost:
+		var req struct {
+			Mode string `json:"mode"`
+			Node uint64 `json:"node_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		// Delegate to state.SetElectionPrimary when available.
+		if ws, ok := any(st).(interface{ SetElectionPrimary(types.NodeID) }); ok {
+			nodeID := types.NodeID(req.Node)
+			ws.SetElectionPrimary(nodeID)
+			writeJSON(w, map[string]any{"status": "primary set", "node_id": nodeID.String()})
+			return
+		}
+		writeJSON(w, map[string]any{"status": "primary set (stub)", "node_id": req.Node})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }

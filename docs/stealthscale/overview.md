@@ -187,9 +187,8 @@ done. It reflects the codebase at the time of writing:
   now exposes `POST /api/users`, `POST /api/preauthkeys`, `PUT /api/policy` and
   `DELETE /api/nodes/{id}` (plus `GET` for all). The `State` interface has
   optional `WriteState` methods; handlers validate JSON and delegate to
-  `state.State` when available, otherwise stub for coverage. Remaining: coordinator
-  election UI and advanced node tag/route management. Use headscale-ui as the
-  interaction-model reference.
+  `state.State` when available, otherwise stub for coverage. Remaining: advanced
+  node tag/route management. Use headscale-ui as the interaction-model reference.
 - **VLESS stealth transport implemented via true Reality.**
   `hscontrol/xray/server.go` uses `github.com/xtls/reality` (`reality.Config`,
   `reality.Server`, `reality.DetectPostHandshakeRecordsLens`) to steal the

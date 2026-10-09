@@ -13,6 +13,7 @@ function setTab(name){
   if(name==='keys') loadKeys();
   if(name==='policy') loadPolicy();
   if(name==='derp') loadDERP();
+  if(name==='election') loadElection();
   if(name==='health') loadHealth();
 }
 function getAPIKey(){ return localStorage.getItem('stscale_apikey')||''; }
@@ -99,6 +100,38 @@ async function loadVLESS(){
     const d = await fetchJSON('/vless/'+encodeURIComponent(id));
     document.getElementById('vlessBody').textContent = JSON.stringify(d, null, 2) + "\n\nURI: " + (d.uri||'');
   }catch(e){ document.getElementById('vlessBody').textContent = e.message; }
+}
+async function loadElection(){
+  try{
+    const d = await fetchJSON('/election');
+    const rows = [
+      ['Mode', d.mode || '(none)'],
+      ['Primary node', d.has_primary ? String(d.primary_node) : '(not elected)'],
+      ['XRay enabled', d.xray_enabled ? 'yes' : 'no'],
+    ];
+    document.getElementById('electionBody').innerHTML = rows.map(r=>`<tr><td class="mono">${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`).join('');
+    // Show action button for manual mode
+    const actions = document.getElementById('electionActions');
+    if(d.mode === 'manual'){
+      actions.innerHTML = `<button onclick="setElectionPrimary()">Set primary (manual)</button>`;
+    } else {
+      actions.innerHTML = '<span class="dim">Auto-election is active — no manual control needed.</span>';
+    }
+  }catch(e){ document.getElementById('electionBody').innerHTML='<tr><td colspan="2" class="dim">'+esc(e.message)+'</td></tr>'; }
+}
+async function setElectionPrimary(){
+  const id = prompt('Enter node ID to set as primary coordinator (e.g. 1):');
+  if(!id) return;
+  try{
+    const r = await fetch(apiBase()+'/election', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({mode:'manual', node_id: parseInt(id,10)})
+    });
+    if(!r.ok) throw new Error(await r.text());
+    alert('Primary set successfully.');
+    loadElection();
+  }catch(e){ alert(e.message); }
 }
 async function loadHealth(){
   try{

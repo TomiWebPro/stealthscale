@@ -21,6 +21,7 @@
   <button data-tab="policy" onclick="setTab('policy')">Policy</button>
   <button data-tab="derp" onclick="setTab('derp')">DERP</button>
   <button data-tab="vless" onclick="setTab('vless')">VLESS</button>
+  <button data-tab="election" onclick="setTab('election')">Election</button>
   <button data-tab="health" onclick="setTab('health')">Health</button>
 </nav>
 <main>
@@ -58,6 +59,15 @@
   <section id="tab-health" class="view">
     <div class="toolbar"><button onclick="loadHealth()">Refresh</button></div>
     <div class="card"><pre id="healthBody" class="pre"></pre></div>
+  </section>
+  <section id="tab-election" class="view">
+    <div class="toolbar">
+      <button onclick="loadElection()">Refresh</button>
+    </div>
+    <div class="card">
+      <table><thead><tr><th>Property</th><th>Value</th></tr></thead><tbody id="electionBody"></tbody></table>
+    </div>
+    <div id="electionActions" class="pill-row" style="margin-top:14px"></div>
   </section>
 </main>
 <script src="app.js"></script>

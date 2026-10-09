@@ -164,6 +164,9 @@ type State struct {
 	// pings tracks pending ping requests and their response channels.
 	pings *pingTracker
 
+	// election tracks coordinator election mode and current primary.
+	election *ElectionState
+
 	// sshCheckAuth tracks when source nodes last completed SSH check auth.
 	//
 	// For rules without explicit checkPeriod (default 12h), auth covers any
@@ -283,9 +286,10 @@ func NewState(cfg *types.Config) (*State, error) {
 		db:        db,
 		ipAlloc:   ipAlloc,
 		polMan:    polMan,
-		authCache: authCache,
-		nodeStore: nodeStore,
-		pings:     newPingTracker(),
+		authCache:  authCache,
+		nodeStore:  nodeStore,
+		pings:      newPingTracker(),
+		election:   NewElectionState(),
 
 		sshCheckAuth:  make(map[sshCheckPair]time.Time),
 		registerLocks: xsync.NewMap[key.MachinePublic, *sync.Mutex](),
@@ -320,6 +324,16 @@ func (s *State) SetDERPMap(dm *tailcfg.DERPMap) {
 // DERPMap returns the current DERP relay configuration for peer-to-peer connectivity.
 func (s *State) DERPMap() tailcfg.DERPMapView {
 	return s.derpMap.Load().View()
+}
+
+// ElectionSnapshot returns a serialisable view of coordinator election state.
+func (s *State) ElectionSnapshot() map[string]any {
+	return s.election.Snapshot()
+}
+
+// SetElectionPrimary sets the elected primary coordinator node ID.
+func (s *State) SetElectionPrimary(nodeID types.NodeID) {
+	s.election.SetPrimary(nodeID)
 }
 
 // ReloadPolicy reloads the access control policy and triggers auto-approval if changed.

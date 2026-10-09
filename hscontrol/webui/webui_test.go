@@ -52,6 +52,7 @@ func (m *mockState) GetPolicy() (*types.Policy, error) {
 }
 func (m *mockState) DERPMap() tailcfg.DERPMapView     { return m.derpMap }
 func (m *mockState) PingDB(ctx context.Context) error { return m.pingErr }
+func (m *mockState) ElectionSnapshot() map[string]any { return nil }
 
 func testConfig() *types.Config {
 	return &types.Config{

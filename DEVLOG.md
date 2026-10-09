@@ -23,6 +23,7 @@ Format:
   `202610092238-webui-coordinator-election.md` (P2)
 
 ## 2026-10-10 01:10 UTC — ss-worker
+
 - picked up P2 issue `202610092238-network-emulation-gaps`
 - created `integration/dockertestutil/network_emulation.go`:
   - `NetworkEmulation` struct + `Apply()`/`ResetAll()` for tc/netem rules
