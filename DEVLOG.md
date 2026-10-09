@@ -18,6 +18,6 @@ Format:
 - refactored `SSHActionHandler` (noise.go) to marshal JSON into a buffer before
   writing HTTP headers — now returns 500 on encode failure instead of 200 empty body
 - moved issue to closed/
-- commit: TBD
+- commit: `0f4a8fe`
 - remaining open issues: `202610092238-network-emulation-gaps.md` (P2),
   `202610092238-webui-coordinator-election.md` (P2)
