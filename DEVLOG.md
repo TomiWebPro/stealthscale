@@ -21,3 +21,20 @@ Format:
 - commit: `0f4a8fe`
 - remaining open issues: `202610092238-network-emulation-gaps.md` (P2),
   `202610092238-webui-coordinator-election.md` (P2)
+
+## 2026-10-10 01:10 UTC — ss-worker
+- picked up P2 issue `202610092238-network-emulation-gaps`
+- created `integration/dockertestutil/network_emulation.go`:
+  - `NetworkEmulation` struct + `Apply()`/`ResetAll()` for tc/netem rules
+    (latency, jitter, drop, duplication, corruption)
+  - `Partition(pool, network, targets, timeout)` for route-level split-brain
+  - `FlakyDERP(pool, network, container, latency, lossPct)` constructor helper
+  - `findContainerInterface()` parses `ip -4 addr show` output, handles veth
+    notation (`eth0@if74`) and bare containers
+  - `buildNetemFilter()` generates tc netem argument strings from
+    `NetworkConditions`
+- added unit tests in `network_emulation_test.go` covering interface detection
+  across Docker/Kernel formats and all netem filter combinations
+- no changes needed to `Dockerfile.integration` — `tc` is already available
+  via the `iproute2` package installed on line 30
+- moved issue to closed/
