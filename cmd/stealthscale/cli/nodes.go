@@ -40,6 +40,7 @@ func init() {
 	mustMarkRequired(expireNodeCmd, "identifier")
 	nodeCmd.AddCommand(expireNodeCmd)
 
+	nodeVLESSCommand.Flags().String("address", "", "Override xray.listen_addr for the VLESS address in the output URI")
 	nodeCmd.AddCommand(nodeVLESSCommand)
 
 	renameNodeCmd.Flags().Uint64P("identifier", "i", 0, "Node identifier (ID)")
@@ -342,10 +343,16 @@ var nodeVLESSCommand = &cobra.Command{
 		}
 
 		secret, publicKey, shortID, dest := types.ResolveXRayIdentity()
+
+		addr := viper.GetString("xray.listen_addr")
+		if overridden, _ := cmd.Flags().GetString("address"); overridden != "" {
+			addr = overridden
+		}
+
 		config := &xray.VLESSConfig{
 			ID:        xray.NodeUUID(nodeID, secret),
 			Network:   "tcp",
-			Address:   viper.GetString("xray.listen_addr"),
+			Address:   addr,
 			Port:      xray.NodePort(nodeID, secret, viper.GetInt("xray.listen_port"), viper.GetInt("xray.max_listen_port")),
 			Security:  viper.GetString("xray.security"),
 			Timeout:   viper.GetDuration("xray.timeout"),
