@@ -646,3 +646,21 @@ Format:
 - also: no open issues (open/ and in-progress/ empty)
 - dirty tree (CHANGELOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, hscontrol/dns/extrarecords_test.go, untracked cmd/stealthscale/cli/nodes_vless_test.go) belongs to the concurrent ss-maintain run — left untouched per ownership rules
 - commit: TBD (devlog-only; --no-verify: prek shells out to nix, absent in this env)
+
+## 2026-10-10 10:50 UTC — ss-maintain
+
+- concurrency guard: passed (no lock at start; wrote "ss-maintain 2026-10-10 10:34 UTC" to /tmp/ss/agent.lock, kept fresh, removed at end of cycle while still owned by this run)
+- build: GOTOOLCHAIN=go1.26.7 go build ./... green
+- tests: GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/... — all packages green (hscontrol 215s, servertest 233s, mapper 39s, db 11s, cli 1.3s); the known go1.27.1 ambient-toolchain strictness failures (closed issue 202610082015) do not occur under the pinned toolchain; race skipped (needs cgo, absent in this env)
+- test improvement (product direction #3, DNS failure mode): hscontrol/dns/extrarecords_test.go TestExtraRecordsManager_CorruptWriteKeepsStaleRecords — pins the fail-safe behavior of updateRecords on a corrupt runtime write to the extra-records file (truncated save, wrong JSON shape): the manager keeps serving the last good records (never blanks DNS for the tailnet) and, once the file is valid again, both adopts AND publishes the new records on UpdateCh (the mapper broadcast path). 0.01s, no Docker; calls updateRecords directly like the existing hash-dedup test. Mutation-validated: blanking records on the read error or dropping the UpdateCh send fails the test
+- bug hunting: audited the freshest flows end-to-end — 5b24803 interactive registration completion (registerOnce/completeInteractiveRegistration fail closed on in-body errors, budget-bounded polling, restarted-URL following), 8ec386a node-key reuse (loadOrCreateNodeKey/resolveStateDir mirror loadOrCreateMachineKey), webui management-parity handlers d784e4d (node lifecycle/expire/rename/tags/routes, auth approve/reject refuse registration sessions with 409 — consistent with state.SetNodeTags refusing empty tags via ErrCannotRemoveAllTags, so the webui "missing tags" 400 matches the state layer), db API-key validation (expiry checked in both ValidateAPIKey and AuthenticateAPIKey). TODO/FIXME scan of auth.go/state.go/webui.go: only architectural kradalby items. No new trivial bugs found this cycle
+- docs check (DOCS RULE): docs/stealthscale/clients.md interactive-join paragraph, up.go Long help/examples, and overview.md claims all match the code (web provider renders the auth-register command, OIDC redirects to the IdP confirmation, approve/reject are SSH-check-only); no doc/code contradictions found, so no docs update needed (test-only change)
+- issues filed: none (queue empty at start; no promised-feature gaps found) | issues closed: none
+- commit: 2b0df73 (--no-verify: prek shells out to nix, absent in this env — equivalent checks run directly: golangci-lint run --new-from-rev=HEAD ./hscontrol/dns/... 0 issues, gofumpt/gofmt clean, targeted tests green under GOTOOLCHAIN=go1.26.7)
+- note: pre-existing dirty tree (CHANGELOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, untracked cmd/stealthscale/cli/nodes_vless_test.go) belongs to earlier/concurrent runs — left untouched per ownership rules; commit 2b0df73 contains only hscontrol/dns/extrarecords_test.go
+- devlog: left uncommitted per protocol (daily-push job handles it)
+
+## 2026-10-10 10:56 UTC — stealth-builder
+
+- concurrency guard passed (no /tmp/ss/agent.lock — ss-maintain removed it at end of its 10:50 cycle); open/ and in-progress/ empty — cycle aborted (queue empty)
+- commit: devlog-only (this entry plus ss-maintain's uncommitted 10:50 DEVLOG text, whose code commit 2b0df73 is already in HEAD — append-only ordering forbids staging this entry alone); other dirty files (CHANGELOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, untracked cmd/stealthscale/cli/nodes_vless_test.go) left untouched per ownership rules; --no-verify (prek shells out to nix, absent in this env)
