@@ -191,12 +191,22 @@ Examples:
 
 		pterm.Info.Println("stealth transport verified; fetching coordinator noise key and performing noise handshake over VLESS...")
 
-		// Load or generate persistent machine key so the node identity is stable.
+		// Load or generate persistent machine and node keys so the
+		// node identity is stable across runs. Reusing the node key
+		// matters: the coordinator skips pre-auth-key validation when
+		// an existing node re-registers with the same node key
+		// (hscontrol/state HandleNodeFromPreAuthKey), so a restarted
+		// node re-registers even when its one-shot pre-auth key was
+		// already spent by the first run.
 		machineKey, err := loadOrCreateMachineKey(stateDir)
 		if err != nil {
 			return fmt.Errorf("machine key: %w", err)
 		}
-		nodeKey := key.NewNode()
+
+		nodeKey, err := loadOrCreateNodeKey(stateDir)
+		if err != nil {
+			return fmt.Errorf("node key: %w", err)
+		}
 
 		// Fetch server's Noise public key via coordinator's /key endpoint.
 		// This is done over plain HTTPS (not VLESS) for discovery; the subsequent
@@ -269,14 +279,6 @@ Examples:
 		}
 		pterm.Success.Printf("registered as %s (authorized=%v, nodeKey=%s)\n", hostname, regResp.MachineAuthorized, nodeKey.Public().ShortString())
 
-		// Persist node key for future MapRequests (optional, for now just print).
-		if stateDir != "" {
-			_ = os.MkdirAll(stateDir, 0o700)
-			if text, err := nodeKey.MarshalText(); err == nil {
-				_ = os.WriteFile(filepath.Join(stateDir, "node.key"), text, 0o600)
-			}
-		}
-
 		pterm.Success.Println("node is ready to serve as coordinator+client (unified). Run 'stscale serve' on this host to also coordinate.")
 		return nil
 	},
@@ -302,16 +304,28 @@ func pendingRegistrationMessage(authURL string) string {
 		authURL
 }
 
+// resolveStateDir returns the directory holding the node's
+// persistent identity keys: the --state-dir flag when given,
+// ~/.stealthscale otherwise (%TEMP%\stealthscale on Windows
+// when the home directory cannot be resolved).
+func resolveStateDir(stateDir string) string {
+	if stateDir != "" {
+		return stateDir
+	}
+
+	home, err := os.UserHomeDir()
+	if err == nil {
+		return filepath.Join(home, ".stealthscale")
+	}
+
+	// os.TempDir handles Windows (%TEMP%), Linux (/tmp) and darwin correctly.
+	return filepath.Join(os.TempDir(), "stealthscale")
+}
+
 func loadOrCreateMachineKey(stateDir string) (key.MachinePrivate, error) {
 	var zero key.MachinePrivate
-	if stateDir == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			stateDir = filepath.Join(home, ".stealthscale")
-		} else {
-			// os.TempDir handles Windows (%TEMP%), Linux (/tmp) and darwin correctly.
-			stateDir = filepath.Join(os.TempDir(), "stealthscale")
-		}
-	}
+
+	stateDir = resolveStateDir(stateDir)
 
 	mkdirErr := os.MkdirAll(stateDir, 0o700)
 	if mkdirErr != nil {
@@ -334,6 +348,52 @@ func loadOrCreateMachineKey(stateDir string) (key.MachinePrivate, error) {
 	if writeErr != nil {
 		return zero, writeErr
 	}
+	return k, nil
+}
+
+// loadOrCreateNodeKey persists the node's NodePrivate key in
+// stateDir/node.key, generating it on first run. Reusing the key
+// across runs is what lets the coordinator's restart fast-path
+// (HandleNodeFromPreAuthKey: an existing node re-registering with
+// the same node key skips pre-auth-key validation) re-register a
+// restarted node without a fresh valid key — a fresh key on every
+// run would force the rotation path, which requires a valid
+// (unspent) pre-auth key. Mirrors loadOrCreateMachineKey; both keys
+// share the state dir so one --state-dir backs the whole identity.
+func loadOrCreateNodeKey(stateDir string) (key.NodePrivate, error) {
+	var zero key.NodePrivate
+
+	stateDir = resolveStateDir(stateDir)
+
+	mkdirErr := os.MkdirAll(stateDir, 0o700)
+	if mkdirErr != nil {
+		return zero, mkdirErr
+	}
+
+	keyPath := filepath.Join(stateDir, "node.key")
+
+	data, readErr := os.ReadFile(keyPath)
+	if readErr == nil {
+		var k key.NodePrivate
+
+		unmarshalErr := k.UnmarshalText(bytes.TrimSpace(data))
+		if unmarshalErr == nil {
+			return k, nil
+		}
+	}
+
+	k := key.NewNode()
+
+	text, err := k.MarshalText()
+	if err != nil {
+		return zero, err
+	}
+
+	writeErr := os.WriteFile(keyPath, text, 0o600)
+	if writeErr != nil {
+		return zero, writeErr
+	}
+
 	return k, nil
 }
 

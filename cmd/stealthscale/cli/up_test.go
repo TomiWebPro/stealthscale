@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -247,6 +250,72 @@ func TestUpAddressOverrideAppliesToFetchedEndpoint(t *testing.T) {
 	// references a non-existent flag is a dead end for the user.
 	assert.Contains(t, err.Error(), "stscale nodes vless")
 	assert.NotContains(t, err.Error(), "--verbose")
+}
+
+// TestLoadOrCreateNodeKeyPersistsIdentity pins the node-identity
+// persistence the coordinator's restart fast-path depends on: the
+// node key written by one `stscale up` run is the key the next
+// run presents, so an existing node re-registering with the same
+// node key skips pre-auth-key validation (hscontrol/state
+// HandleNodeFromPreAuthKey) and re-registers even when its
+// one-shot pre-auth key was already spent by the first run —
+// the scenario TestGitHubIssue2830_NodeRestartWithUsedPreAuthKey
+// pins server-side. Before the fix every run generated a fresh
+// node key (the persisted node.key was written but never read),
+// forcing the rotation path — which requires a valid, unspent
+// key — on every restart.
+func TestLoadOrCreateNodeKeyPersistsIdentity(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+
+	first, err := loadOrCreateNodeKey(stateDir)
+	require.NoError(t, err)
+	require.False(t, first.IsZero(), "a fresh state dir must yield a generated key")
+
+	// A second run in the same state dir must reuse the key, not
+	// rotate it: a fresh key here is the bug that broke restarts
+	// with a spent one-shot pre-auth key.
+	second, err := loadOrCreateNodeKey(stateDir)
+	require.NoError(t, err)
+	assert.Equal(t, first, second, "re-runs must reuse the persisted node key")
+
+	// The key file lands next to machine.key with 0600 perms.
+	info, err := os.Stat(filepath.Join(stateDir, "node.key"))
+	require.NoError(t, err)
+	assert.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
+
+	// A corrupt file (e.g. a partially written upgrade) is
+	// replaced with a fresh, valid key rather than failing the
+	// join.
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "node.key"), []byte("not a node key"), 0o600))
+
+	regenerated, err := loadOrCreateNodeKey(stateDir)
+	require.NoError(t, err)
+	require.False(t, regenerated.IsZero())
+	assert.NotEqual(t, first, regenerated, "corrupt content must be replaced, not reused")
+}
+
+// TestLoadOrCreateNodeKeySharesStateDirWithMachineKey pins that
+// both identity keys resolve to the same directory, so a single
+// --state-dir (or the default ~/.stealthscale) backs the whole
+// node identity: the machine key that opens the Noise session and
+// the node key that registers must not live in different places.
+func TestLoadOrCreateNodeKeySharesStateDirWithMachineKey(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+
+	_, err := loadOrCreateMachineKey(stateDir)
+	require.NoError(t, err)
+
+	_, err = loadOrCreateNodeKey(stateDir)
+	require.NoError(t, err)
+
+	for _, name := range []string{"machine.key", "node.key"} {
+		_, err := os.Stat(filepath.Join(stateDir, name))
+		assert.NoError(t, err, "%s must be persisted in the shared state dir", name)
+	}
 }
 
 // TestPendingRegistrationMessageSurfacesAuthURL pins that a

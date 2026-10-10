@@ -212,6 +212,20 @@ with the same UUID/port (derived as
 `HMAC(xray.secret,"node-port:<id>")` `hscontrol/xray/vless.go:156` — fallback
 `stealthscale:<id>` only when no secret, e.g. tests).
 
+!!! note "Node identity is persisted across runs"
+
+```
+`stscale up` persists its machine and node keys in the state
+directory (`--state-dir`, default `~/.stealthscale`), so
+re-running `stscale up` — e.g. after a container restart —
+reuses the same node identity. The coordinator skips
+pre-auth-key validation when an existing node re-registers with
+its original node key (`hscontrol/state`
+`HandleNodeFromPreAuthKey`), so a restart re-registers even when
+the one-shot pre-auth key was already spent by the first run.
+Delete the state directory to start over with a fresh identity.
+```
+
 ### Reference: patching `tailscale` (optional)
 
 You do **not** need a patched `tailscale`. `stscale` is the client. This
