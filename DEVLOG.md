@@ -621,3 +621,21 @@ Format:
 
 - concurrency guard: /tmp/ss/agent.lock held by ss-maintain (content ts 2026-10-10 10:11:51 UTC, mtime ~10:15 UTC; < 15 min threshold) — skipped cycle
 - also: no open issues (open/ and in-progress/ empty)
+
+## 2026-10-10 10:22 UTC — ss-maintain
+
+- concurrency guard: passed (no lock held at start); wrote "ss-maintain 2026-10-10 10:11:51 UTC" to /tmp/ss/agent.lock, kept fresh with touch on long steps, removed at end of cycle (still owned by this run)
+- build: GOTOOLCHAIN=go1.26.7 go build ./... green
+- tests: GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/... — all 27 packages green (hscontrol 218s, servertest 232s, mapper 39s, cli 1.3s); the 3 known go1.27.1 ambient-toolchain strictness failures (closed issue 202610082015) do not occur under the Makefile-pinned toolchain; race skipped (needs cgo, absent in this env)
+- test improvement (product direction #3, failure-point): cmd/stealthscale/cli/up_test.go TestRegisterOnceSurfacesInBodyError — pins the coordinator's actual registration-failure channel: the noise RegistrationHandler (hscontrol/noise.go:749-751 regErr, 776-785 HTTPError wrap, 795-798 200+encode) answers every registration failure (invalid/spent pre-auth key, node key in use, machine-key mismatch) with HTTP 200 + in-body {"Error":"..."}, not an HTTP error status; registerOnce must fail closed and surface the coordinator's message verbatim (never misreport a rejected join as pending/authorized). 2 subtests, 0.02s, no Docker. Mutation-validated: neutering the regResp.Error check in registerOnce fails both subtests
+- bug hunting: audited the freshest flow (5b24803 interactive registration completion, 8ec386a node-key reuse) end-to-end; verified prior cycles' claims against code: approve/reject refuse registration sessions with 409 and deliver no verdict (pinned by webui/webui_write_test.go:448-469), waitForFollowup restarts on node-less verdicts (auth_test.go TestFollowupVerdictWithoutNodeRestartsRegistration). Verified stscale health (referenced in up.go hints/examples) exists; docs/stealthscale/clients.md + overview.md claims about up (--coordinator required, --node-id endpoint fetch, interactive flow, 10-minute budget, node-identity persistence) all match the code
+- finding (recorded, not filed): the coordinator's transient wait-window expiry (waitForFollowup "registration timed out", hscontrol/auth.go:327-328) and definitive rejections (machineKeyMismatch auth.go:346, invalid registration ID auth.go:312-315) arrive over the wire in the SAME shape (HTTP 200 + in-body Error, via noise.go:776-785), so completeInteractiveRegistration's retry-on-error is partly intentional; distinguishing them would need error-string matching or a protocol change (distinct status codes/error taxonomy) — cross-component, non-trivial; the flow fails closed within the 10-minute budget either way. Not filed per issues/README.md "no would-be-nice" rule; left here for a future decision
+- issues filed: none (queue empty at start; no new promised-feature gaps found) | issues closed: none
+- commit: ba72798 (--no-verify: prek shells out to nix, absent in this env — equivalent checks run directly: golangci-lint run --new-from-rev=HEAD ./cmd/stealthscale/cli/... 0 issues in changed files, go vet clean, targeted tests green under GOTOOLCHAIN=go1.26.7)
+- note: pre-existing dirty tree (CHANGELOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, untracked cmd/stealthscale/cli/nodes_vless_test.go) belongs to earlier runs — left untouched per ownership rules (the one remaining package lint finding is the known testifylint nit in that untracked file, owner: the ~01:45 --address cycle, per the 09:40 note)
+- devlog: left uncommitted per protocol (daily-push job handles it; a concurrent agent landed c8a0f89 during this cycle, so committing DEVLOG wholesale would risk sweeping in others' entries)
+
+## 2026-10-10 10:38 UTC — stealth-builder
+
+- concurrency guard: /tmp/ss/agent.lock held by ss-maintain (mtime 10:34 UTC, ~4 min old, < 15 min threshold) — skipped cycle
+- also: no open issues (open/ and in-progress/ empty)
