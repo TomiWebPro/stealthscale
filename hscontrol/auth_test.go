@@ -3165,6 +3165,50 @@ func createTestApp(t *testing.T) *StealthScale {
 	return app
 }
 
+// createTestAppWithRegisterCacheTTL creates a test app whose
+// registration auth cache expires pending sessions after ttl
+// ([types.Tuning.RegisterCacheExpiration]). It exists for
+// failure-point tests of registration-session expiry.
+func createTestAppWithRegisterCacheTTL(t *testing.T, ttl time.Duration) *StealthScale {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+
+	cfg := types.Config{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		ServerURL:           "http://localhost:8080",
+		NoisePrivateKeyPath: tmpDir + "/noise_private.key",
+		Database: types.DatabaseConfig{ //nolint:exhaustruct_v5 // test fixture
+			Type: "sqlite3",
+			Sqlite: types.SqliteConfig{ //nolint:exhaustruct_v5 // test fixture
+				Path: tmpDir + "/stealthscale_test.db",
+			},
+		},
+		OIDC: types.OIDCConfig{}, //nolint:exhaustruct_v5 // test fixture
+		Policy: types.PolicyConfig{ //nolint:exhaustruct_v5 // test fixture
+			Mode: types.PolicyModeDB,
+		},
+		Tuning: types.Tuning{ //nolint:exhaustruct_v5 // test fixture
+			BatchChangeDelay:        100 * time.Millisecond,
+			BatcherWorkers:          1,
+			RegisterCacheExpiration: ttl,
+		},
+	}
+
+	app, err := NewStealthScale(&cfg)
+	require.NoError(t, err)
+
+	app.mapBatcher = mapper.NewBatcherAndMapper(&cfg, app.state)
+	app.mapBatcher.Start()
+
+	t.Cleanup(func() {
+		if app.mapBatcher != nil {
+			app.mapBatcher.Close()
+		}
+	})
+
+	return app
+}
+
 // TestGitHubIssue2830_NodeRestartWithUsedPreAuthKey tests the scenario reported in
 // https://github.com/tomiwebpro/stealthscale/issues/2830
 //
@@ -4253,4 +4297,87 @@ func TestFollowupWaitPrefersCompletedAuthOverExpiredContext(t *testing.T) {
 		"waitForFollowup must never report a timeout when auth has already completed; got %d/%d timeouts",
 		timeouts, iterations)
 	assert.Equal(t, iterations, authorized, "every completed registration must be returned as authorized")
+}
+
+// TestRegistrationSessionTTLExpiryRestartsFollowup pins the
+// auth-expiry failure mode of the followup poll: when a pending
+// registration's auth cache entry expires (TTL) while the client is
+// parked on [StealthScale.waitForFollowup], the cache eviction
+// callback delivers [state.ErrRegistrationExpired] and the poll
+// must answer with a FRESH registration URL so the client restarts
+// the flow — never a hang, a 401, or the dead session's URL.
+//
+// The short TTL is configurable via [types.Tuning.RegisterCacheExpiration];
+// the expirable LRU's janitor fires the eviction callback on expiry
+// (hashicorp/golang-lru/v2 expirable), waking the parked poll.
+func TestRegistrationSessionTTLExpiryRestartsFollowup(t *testing.T) {
+	const sessionTTL = 300 * time.Millisecond
+
+	app := createTestAppWithRegisterCacheTTL(t, sessionTTL)
+
+	machineKey := key.NewMachine()
+
+	// Park a pending registration the way the initial
+	// handleRegister round-trip does for a keyless node.
+	authID, err := types.NewAuthID()
+	require.NoError(t, err)
+
+	regEntry := types.NewRegisterAuthRequest(&types.RegistrationData{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		MachineKey: machineKey.Public(),
+		NodeKey:    key.NewNode().Public(),
+		Hostname:   "ttl-expiry-node",
+	})
+	app.state.SetAuthCacheEntry(authID, regEntry)
+
+	_, ok := app.state.GetAuthCacheEntry(authID)
+	require.True(t, ok, "registration session must be cached before its TTL elapses")
+
+	req := tailcfg.RegisterRequest{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		Followup: fmt.Sprintf("http://localhost:8080/register/%s", authID),
+		NodeKey:  regEntry.RegistrationData().NodeKey,
+	}
+
+	// The verdict channel is still empty, so the poll parks on the
+	// inner select of waitForFollowup until the TTL eviction fires.
+	type pollResult struct {
+		resp *tailcfg.RegisterResponse
+		err  error
+	}
+
+	done := make(chan pollResult, 1)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		resp, err := app.waitForFollowup(ctx, req, machineKey.Public())
+		done <- pollResult{resp: resp, err: err}
+	}()
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err,
+			"an expired registration session must restart the flow, not fail the poll")
+		require.NotNil(t, r.resp)
+		require.NotEmpty(t, r.resp.AuthURL,
+			"an expired registration session must return a fresh AuthURL to restart with")
+		assert.NotContains(t, r.resp.AuthURL, authID.String(),
+			"the fresh AuthURL must not reuse the expired session's ID")
+
+		// Positive control: the restart parked a NEW registration
+		// session, bound to the same machine key, that the client
+		// can continue polling.
+		newAuthID, err := types.AuthIDFromString(
+			strings.Replace(strings.TrimPrefix(r.resp.AuthURL, "http://localhost:8080/register/"), "/", "", 1),
+		)
+		require.NoError(t, err, "fresh AuthURL must carry a parseable registration ID")
+
+		newEntry, ok := app.state.GetAuthCacheEntry(newAuthID)
+		require.True(t, ok, "the restarted registration must be cached for the next followup poll")
+		require.True(t, newEntry.IsRegistration(), "the restarted session must carry registration data")
+		assert.Equal(t, machineKey.Public(), newEntry.RegistrationData().MachineKey,
+			"the restarted session must stay bound to the polling machine key")
+	case <-time.After(10 * time.Second):
+		t.Fatal("waitForFollowup hung instead of restarting the expired registration session")
+	}
 }
