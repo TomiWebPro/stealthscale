@@ -1,75 +1,171 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Control Console</title>
-<link rel="stylesheet" href="style.css">
-</head>
-<body>
-<header>
-  <div class="logo">CC</div>
-  <h1>Control Console</h1>
-  <span class="sub">Management Plane</span>
-  <span class="live"><span class="dot"></span> live</span>
-  <span id="clock" style="cursor:pointer" title="Click to set API key" onclick="promptAPIKey()" class="mono dim"></span>
-</header>
-<nav class="tabs">
-  <button class="on" data-tab="nodes" onclick="setTab('nodes')">Nodes</button>
-  <button data-tab="users" onclick="setTab('users')">Users</button>
-  <button data-tab="keys" onclick="setTab('keys')">PreAuth Keys</button>
-  <button data-tab="policy" onclick="setTab('policy')">Policy</button>
-  <button data-tab="derp" onclick="setTab('derp')">DERP</button>
-  <button data-tab="vless" onclick="setTab('vless')">VLESS</button>
-  <button data-tab="election" onclick="setTab('election')">Election</button>
-  <button data-tab="health" onclick="setTab('health')">Health</button>
-</nav>
-<main>
-  <section id="tab-nodes" class="view on">
-    <div class="toolbar">
-      <button onclick="loadNodes()">Refresh</button>
-      <span class="dim mono" id="nodes-count"></span>
-    </div>
-    <div class="card"><table><thead><tr><th>ID</th><th>Hostname</th><th>User</th><th>IPs</th><th>Tags</th><th>VLESS</th></tr></thead><tbody id="nodesBody"></tbody></table></div>
-  </section>
-  <section id="tab-users" class="view">
-    <div class="toolbar"><button onclick="loadUsers()">Refresh</button></div>
-    <div class="card"><table><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Provider</th></tr></thead><tbody id="usersBody"></tbody></table></div>
-  </section>
-  <section id="tab-keys" class="view">
-    <div class="toolbar"><button onclick="loadKeys()">Refresh</button></div>
-    <div class="card"><table><thead><tr><th>ID</th><th>Key</th><th>User</th><th>Reusable</th><th>Used</th><th>Expiry</th></tr></thead><tbody id="keysBody"></tbody></table></div>
-  </section>
-  <section id="tab-policy" class="view">
-    <div class="toolbar"><button onclick="loadPolicy()">Refresh</button></div>
-    <div class="card"><pre id="policyBody" class="pre"></pre></div>
-  </section>
-  <section id="tab-derp" class="view">
-    <div class="toolbar"><button onclick="loadDERP()">Refresh</button></div>
-    <div class="card"><pre id="derpBody" class="pre"></pre></div>
-    <div id="derpStatus" class="pill-row"></div>
-  </section>
-  <section id="tab-vless" class="view">
-    <div class="toolbar">
-      <input id="vlessId" placeholder="Node ID (e.g. 1)" style="max-width:180px">
-      <button onclick="loadVLESS()">Fetch VLESS URI</button>
-    </div>
-    <div class="card"><pre id="vlessBody" class="pre">Enter a node ID to fetch its VLESS endpoint.</pre></div>
-  </section>
-  <section id="tab-health" class="view">
-    <div class="toolbar"><button onclick="loadHealth()">Refresh</button></div>
-    <div class="card"><pre id="healthBody" class="pre"></pre></div>
-  </section>
-  <section id="tab-election" class="view">
-    <div class="toolbar">
-      <button onclick="loadElection()">Refresh</button>
-    </div>
-    <div class="card">
-      <table><thead><tr><th>Property</th><th>Value</th></tr></thead><tbody id="electionBody"></tbody></table>
-    </div>
-    <div id="electionActions" class="pill-row" style="margin-top:14px"></div>
-  </section>
-</main>
-<script src="app.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Control Console</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="logo">CC</div>
+      <h1>Control Console</h1>
+      <span class="sub">Management Plane</span>
+      <span class="live"><span class="dot"></span> live</span>
+      <span
+        id="clock"
+        style="cursor: pointer"
+        title="Click to set API key"
+        onclick="promptAPIKey()"
+        class="mono dim"
+      ></span>
+    </header>
+    <nav class="tabs">
+      <button class="on" data-tab="nodes" onclick="setTab('nodes')">Nodes</button>
+      <button data-tab="users" onclick="setTab('users')">Users</button>
+      <button data-tab="keys" onclick="setTab('keys')">PreAuth Keys</button>
+      <button data-tab="apikeys" onclick="setTab('apikeys')">API Keys</button>
+      <button data-tab="auth" onclick="setTab('auth')">Auth</button>
+      <button data-tab="policy" onclick="setTab('policy')">Policy</button>
+      <button data-tab="derp" onclick="setTab('derp')">DERP</button>
+      <button data-tab="vless" onclick="setTab('vless')">VLESS</button>
+      <button data-tab="election" onclick="setTab('election')">Election</button>
+      <button data-tab="health" onclick="setTab('health')">Health</button>
+    </nav>
+    <main>
+      <section id="tab-nodes" class="view on">
+        <div class="toolbar">
+          <button onclick="loadNodes()">Refresh</button>
+          <span class="dim mono" id="nodes-count"></span>
+        </div>
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Hostname</th>
+                <th>User</th>
+                <th>IPs</th>
+                <th>Tags</th>
+                <th>VLESS</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="nodesBody"></tbody>
+          </table>
+        </div>
+      </section>
+      <section id="tab-users" class="view">
+        <div class="toolbar"><button onclick="loadUsers()">Refresh</button></div>
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Provider</th>
+              </tr>
+            </thead>
+            <tbody id="usersBody"></tbody>
+          </table>
+        </div>
+      </section>
+      <section id="tab-keys" class="view">
+        <div class="toolbar"><button onclick="loadKeys()">Refresh</button></div>
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Key</th>
+                <th>User</th>
+                <th>Reusable</th>
+                <th>Used</th>
+                <th>Expiry</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="keysBody"></tbody>
+          </table>
+        </div>
+      </section>
+      <section id="tab-apikeys" class="view">
+        <div class="toolbar">
+          <button onclick="loadAPIKeys()">Refresh</button>
+          <button onclick="createAPIKey()">Create API key</button>
+        </div>
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Prefix</th>
+                <th>User</th>
+                <th>Created</th>
+                <th>Expires</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="apiKeysBody"></tbody>
+          </table>
+        </div>
+      </section>
+      <section id="tab-auth" class="view">
+        <div class="toolbar">
+          <input id="authId" placeholder="Auth ID (hskey-authreq-...)" style="max-width: 280px" />
+          <button onclick="authStatus()">Check status</button>
+          <button onclick="authApprove()">Approve</button>
+          <button onclick="authReject()">Reject</button>
+        </div>
+        <div class="card"><pre id="authBody" class="pre">Enter an auth ID to inspect or decide a pending authentication request.</pre></div>
+      </section>
+      <section id="tab-policy" class="view">
+        <div class="toolbar"><button onclick="loadPolicy()">Refresh</button></div>
+        <div class="card"><pre id="policyBody" class="pre"></pre></div>
+        <div class="card" style="margin-top:14px">
+          <div class="toolbar">
+            <button onclick="checkPolicy()">Validate draft</button>
+            <span class="dim">Check a draft policy against live users and nodes without applying it</span>
+          </div>
+          <textarea id="policyCheckInput" class="pre" rows="10" style="width:100%"></textarea>
+          <pre id="policyCheckResult" class="pre"></pre>
+        </div>
+      </section>
+      <section id="tab-derp" class="view">
+        <div class="toolbar"><button onclick="loadDERP()">Refresh</button></div>
+        <div class="card"><pre id="derpBody" class="pre"></pre></div>
+        <div id="derpStatus" class="pill-row"></div>
+      </section>
+      <section id="tab-vless" class="view">
+        <div class="toolbar">
+          <input id="vlessId" placeholder="Node ID (e.g. 1)" style="max-width: 180px" />
+          <button onclick="loadVLESS()">Fetch VLESS URI</button>
+        </div>
+        <div class="card"><pre id="vlessBody" class="pre">Enter a node ID to fetch its VLESS endpoint.</pre></div>
+      </section>
+      <section id="tab-health" class="view">
+        <div class="toolbar"><button onclick="loadHealth()">Refresh</button></div>
+        <div class="card"><pre id="healthBody" class="pre"></pre></div>
+      </section>
+      <section id="tab-election" class="view">
+        <div class="toolbar">
+          <button onclick="loadElection()">Refresh</button>
+        </div>
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>Property</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody id="electionBody"></tbody>
+          </table>
+        </div>
+        <div id="electionActions" class="pill-row" style="margin-top: 14px"></div>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
 </html>

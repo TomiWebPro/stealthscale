@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
-	"net/netip"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/views"
 )
@@ -111,6 +111,7 @@ func TestWebUI_APIs(t *testing.T) {
 		"/web/api/policy",
 		"/web/api/derp",
 		"/web/api/health",
+		"/web/api/apikeys",
 		"/admin/api/nodes",
 		"/admin/api/health",
 	}

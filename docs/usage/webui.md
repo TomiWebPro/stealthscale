@@ -6,12 +6,15 @@ Visit `http://<server>:8080/web` or `http://<server>:8080/admin` (alias) — wor
 
 ## Features
 
-- **Nodes** — hostname, IPs, tags, VLESS UUID/port
-- **Users** — names, emails, providers
-- **PreAuthKeys** — keys, reuse/ephemeral flags, expiry
-- **Policy** — current ACL/HuJSON policy
+- **Nodes** — hostname, IPs, tags, VLESS UUID/port; per-node actions: expire (set an RFC3339 timestamp or `never`), rename, tag, and approve advertised routes
+- **Users** — names, emails, providers; create users
+- **PreAuthKeys** — keys, reuse/ephemeral flags, expiry; create, expire and delete keys
+- **API Keys** — list (masked prefixes only), create (raw key shown once), expire and delete
+- **Auth** — inspect, approve and reject pending authentication requests by auth ID
+- **Policy** — current ACL/HuJSON policy; validate a draft policy against the live users and nodes without applying it
 - **DERP** — DERP map with `stealth_satisfied` and `shouldIncludeDERP` flags (fail-closed when stealth unsatisfied)
 - **VLESS** — per-node `vless://` URI, UUID, port, Reality dest
+- **Election** — coordinator election status; set the primary node in manual mode
 - **Health** — machine API health, DB ping, stealth status
 
 Dark theme matches the scheduler WebUI (`--bg:#0b0e14;--panel:#11151f;--line:#232a3b;--acc:#5b8cff`).
@@ -38,18 +41,34 @@ When hardening is disabled, all endpoints serve JSON from the live `state.State`
 ```
 GET    /web/api/nodes        # list nodes
 DELETE /web/api/nodes/{id}   # delete node (delegates to `state.DeleteNode(NodeView)`, falls back to stub in tests)
+POST   /web/api/nodes/{id}/expire   # set node expiry {expiry: "<RFC3339>"|"never"} → `state.SetNodeExpiry`
+POST   /web/api/nodes/{id}/rename   # rename node {name} → `state.RenameNode`
+POST   /web/api/nodes/{id}/tags     # set node tags {tags: ["tag:..."]} → `state.SetNodeTags`
+POST   /web/api/nodes/{id}/routes   # approve advertised routes {routes: ["10.0.0.0/24"]} → `state.SetApprovedRoutes`
 GET    /web/api/users        # list users
 POST   /web/api/users        # create user {name, email} (delegates to `state.CreateUser` with Change)
 GET    /web/api/preauthkeys  # list pre-auth keys
 POST   /web/api/preauthkeys  # create pre-auth key {userID, reusable, ephemeral, aclTags, expiry} (delegates to `state.CreatePreAuthKey`)
+POST   /web/api/preauthkeys/{id}/expire  # expire pre-auth key → `state.ExpirePreAuthKey`
+DELETE /web/api/preauthkeys/{id}         # delete pre-auth key → `state.DeletePreAuthKey`
+GET    /web/api/apikeys      # list API keys (masked prefixes only — never key material or hashes)
+POST   /web/api/apikeys      # create API key {expiry} → raw key returned exactly once → `state.CreateAPIKey`
+POST   /web/api/apikeys/{id}/expire  # expire API key → `state.ExpireAPIKey`
+DELETE /web/api/apikeys/{id}         # destroy API key → `state.DestroyAPIKey`
+GET    /web/api/auth/{id}    # pending auth session status → `state.GetAuthCacheEntry`
+POST   /web/api/auth/{id}/approve   # approve pending auth session (`FinishAuth` with an accepting verdict)
+POST   /web/api/auth/{id}/reject    # reject pending auth session (`FinishAuth` with a rejecting verdict)
 GET    /web/api/policy       # current policy
 PUT    /web/api/policy       # set policy {policy: "HuJSON string"} (also POST)
+POST   /web/api/policy/check # validate a draft policy against live users and nodes without persisting it
 GET    /web/api/derp         # DERP map + stealth_satisfied flag
 GET    /web/api/vless/{id}   # VLESS URI for node {id}
+GET    /web/api/election     # coordinator election snapshot
+POST   /web/api/election     # set primary node (manual mode)
 GET    /web/api/health       # health + stealth status
 ```
 
-All write endpoints are available under both `/web/api/*` and `/admin/api/*` (alias). They validate JSON and, when `WriteState` is implemented, delegate to `state.State` (e.g. `CreateUser`, `CreatePreAuthKey`, `SetPolicy`, `DeleteNode`). Otherwise they return stub success for coverage. Holepunching via DERP/STUN is exempt from the VLESS requirement and is only offered when stealth is satisfied.
+All write endpoints are available under both `/web/api/*` and `/admin/api/*` (alias). They validate JSON and, when the corresponding write method is implemented, delegate to `state.State` (e.g. `CreateUser`, `CreatePreAuthKey`, `SetPolicy`, `DeleteNode`, `SetNodeExpiry`, `RenameNode`, `SetNodeTags`, `SetApprovedRoutes`, `ExpirePreAuthKey`, `DeletePreAuthKey`, `CreateAPIKey`, `ExpireAPIKey`, `DestroyAPIKey`, and the auth-session verdicts). Otherwise they return stub success for coverage. Holepunching via DERP/STUN is exempt from the VLESS requirement and is only offered when stealth is satisfied.
 
 ## Serving
 
@@ -60,4 +79,4 @@ The UI is registered via `hscontrol/webui.Register(mux, cfg, state)` in `hscontr
 Terminate TLS at your reverse proxy and forward `/web` and `/` to the StealthScale server. See [Reverse proxy](../ref/integration/reverse-proxy.md) and [TLS](../ref/tls.md).
 
 
-> **Parity gaps (tracked):** `nodes expire/rename/tag/approve-routes`, `preauthkeys expire/delete`, `apikeys` CRUD, `auth` approve, and policy `check` are CLI-only (`cmd/stealthscale/cli/*.go`) and not yet in WebUI tabs (`frontend/index.html`). See `feature-webui-management-parity` and `ui-webui-write-stubs-and-cli-parity`. WebUI now stores API key in `localStorage` and sends `Authorization: Bearer` (see `frontend/app.js:ensureAPIKey`). Hardened default requires `enforce && enforce_control` but now validates via `ValidateAPIKey` (not presence only).
+> **Management parity:** node expire/rename/tag/approve-routes, pre-auth key expire/delete, API-key CRUD, auth approve/reject and policy `check` are all reachable from the Web UI (see the API list above; implemented in `hscontrol/webui/webui.go`, tabs in `frontend/index.html`). WebUI stores the API key in `localStorage` and sends `Authorization: Bearer` (see `frontend/app.js:ensureAPIKey`). Hardened default requires `enforce && enforce_control` and validates via `ValidateAPIKey` (not presence only).
