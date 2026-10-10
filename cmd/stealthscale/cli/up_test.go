@@ -621,3 +621,52 @@ func TestCompleteInteractiveRegistrationNeighboringFailureModes(t *testing.T) {
 		assert.Equal(t, authURL, rt.requests[2].Followup)
 	})
 }
+
+// TestRegisterOnceSurfacesInBodyError pins the coordinator's
+// actual registration-failure channel: the noise
+// RegistrationHandler answers every registration failure —
+// an invalid or spent pre-auth key, a node key already in
+// use, a machine-key mismatch (hscontrol/noise.go
+// RegistrationHandler wraps handleRegister's HTTPError, and
+// any other error, via regErr) — with HTTP 200 and an
+// in-body {"Error":"..."}, not an HTTP error status.
+// registerOnce must fail closed on that body and surface
+// the coordinator's message: silently treating it as a
+// pending or authorized answer would misreport a rejected
+// join as in progress.
+func TestRegisterOnceSurfacesInBodyError(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		message string
+	}{
+		{name: "spent pre-auth key", message: "invalid pre auth key"},
+		{
+			name:    "machine-key mismatch",
+			message: "node key in request does not match the one associated with this machine key",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			nodeKey := key.NewNode().Public()
+
+			//nolint:exhaustruct_v5 // test fixture: requests fill up during RoundTrip
+			rt := &scriptedTransport{
+				t: t,
+				responses: []scriptedResponse{
+					{status: http.StatusOK, body: `{"Error":"` + tc.message + `"}`},
+				},
+			}
+
+			_, err := registerOnce(context.Background(), rt, interactiveRegistrationFixture(nodeKey))
+			require.Error(t, err, "an in-body coordinator error must fail the registration")
+			require.ErrorIs(t, err, errRegisterError)
+			assert.Contains(t, err.Error(), tc.message, "the coordinator's verdict must be surfaced verbatim")
+
+			require.Len(t, rt.requests, 1)
+			assert.Equal(t, nodeKey, rt.requests[0].NodeKey)
+		})
+	}
+}
