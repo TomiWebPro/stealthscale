@@ -75,6 +75,61 @@ func TestRegisterConfirmHandler_RejectsCSRFMismatch(t *testing.T) {
 		"rejected POST must not clear the pending confirmation")
 }
 
+// TestRegisterConfirmHandler_SessionExpired verifies that
+// /register/confirm fails closed when the registration session is
+// gone by the time the user clicks the interstitial — the
+// authCache TTL (15 min), eviction, or a control-plane restart
+// between the OIDC callback and the confirm POST. Without the
+// cache-lookup guard the POST could finalise a registration for
+// an attacker who knows an auth_id after its session lapsed.
+func TestRegisterConfirmHandler_SessionExpired(t *testing.T) {
+	t.Parallel()
+
+	app := createTestApp(t)
+	provider := &AuthProviderOIDC{h: app}
+
+	// An auth_id with no cached registration session: the OIDC
+	// callback ran (the interstitial was rendered) but the entry
+	// has since expired or been evicted.
+	authID := types.MustAuthID()
+
+	rec := httptest.NewRecorder()
+	provider.RegisterConfirmHandler(rec,
+		newConfirmRequest(t, authID, "any-csrf", "any-csrf"),
+	)
+
+	assert.Equal(t, http.StatusGone, rec.Code,
+		"an expired/evicted registration session must be rejected with 410")
+}
+
+// TestRegisterConfirmHandler_RejectsNonPOST verifies that
+// /register/confirm only accepts POST: the confirmation is a
+// state-changing operation and must not be reachable via GET,
+// where a cross-site link could trigger it without the form
+// body the CSRF check reads.
+func TestRegisterConfirmHandler_RejectsNonPOST(t *testing.T) {
+	t.Parallel()
+
+	app := createTestApp(t)
+	provider := &AuthProviderOIDC{h: app}
+
+	authID := types.MustAuthID()
+
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodGet,
+		"/register/confirm/"+authID.String(), nil,
+	)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("auth_id", authID.String())
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rec := httptest.NewRecorder()
+	provider.RegisterConfirmHandler(rec, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code,
+		"a non-POST confirm request must be rejected with 405")
+}
+
 // TestRegisterConfirmHandler_RejectsWithoutPending verifies that
 // /register/confirm refuses to finalise a registration that did not
 // first complete the OIDC interstitial. Without this check an attacker
