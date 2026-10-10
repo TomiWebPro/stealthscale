@@ -1,6 +1,11 @@
 # For testing purposes only
 
-FROM golang:1.26.7-alpine AS build-env
+# The builder image must be at least the Go version required by
+# tailscale's go.mod (upstream bumps it frequently; as of 2026-10
+# tailscale HEAD requires go >= 1.27.2 and fails to build with
+# GOTOOLCHAIN=local on older images).
+
+FROM golang:1.27.2-alpine AS build-env
 
 WORKDIR /go/src
 

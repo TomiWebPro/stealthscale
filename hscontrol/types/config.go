@@ -255,9 +255,9 @@ type StealthConfig struct {
 
 	// EnforceControl disables the legacy plaintext Tailscale Noise (/ts2021)
 	// registration endpoint on the public router, forcing node registration to
-	// occur only over the stealth VLESS transport. Off by default to preserve
-	// compatibility with stock clients; enable only with a stealth-capable
-	// (uTLS-based) client.
+	// occur only over the stealth VLESS transport. Defaults to true (see
+	// viper.SetDefault for "xray.stealth.enforce_control"); turn it off only
+	// when stock (non-stealth-capable) clients must be able to register.
 	EnforceControl bool `mapstructure:"enforce_control"`
 
 	// ProbeInterval is how often stealth probes run.

@@ -1,6 +1,7 @@
 package dockertestutil
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -13,11 +14,11 @@ import (
 type TCType int
 
 const (
-	_ TCType = iota
-	TC_Latency          // delay + jitter
-	TC_Loss             // packet loss
-	TC_Duplication      // duplicate packets
-	TC_Corruption       // bit corruption
+	_              TCType = iota
+	TC_Latency            // delay + jitter
+	TC_Loss               // packet loss
+	TC_Duplication        // duplicate packets
+	TC_Corruption         // bit corruption
 )
 
 func (t TCType) String() string {
@@ -65,11 +66,11 @@ func (c NetworkConditions) isZero() bool {
 // All calls are scoped to the containers named at construction; other
 // containers on the same network are unaffected.
 type NetworkEmulation struct {
-	pool        *dockertest.Pool
-	network     *dockertest.Network
-	containers  []string
-	preset      NetworkConditions // optional pre-set conditions from constructor helpers
-	hasPreset   bool
+	pool       *dockertest.Pool
+	network    *dockertest.Network
+	containers []string
+	preset     NetworkConditions // optional pre-set conditions from constructor helpers
+	hasPreset  bool
 }
 
 // NewNetworkEmulation returns a new emitter operating on the named
@@ -266,6 +267,55 @@ func Partition(
 
 		_ = containerID
 		log.Printf("partitioned %s: blackholing %d subnets via lo", name, len(subnets))
+	}
+
+	return nil
+}
+
+// errNoSubnets backs the guard clauses of [Partition] and
+// [RestorePartition]: shaping or restoring routes is meaningless
+// on a network with no known subnets.
+var errNoSubnets = errors.New("network has no known subnets")
+
+// RestorePartition undoes [Partition] by replacing the blackhole
+// routes it installed with the original directly-connected routes
+// on [network], restoring the targets' reachability to peers.
+// Safe to call even if [Partition] was never applied — replacing
+// a route that does not exist simply (re)installs the connected
+// route.
+func RestorePartition(
+	pool *dockertest.Pool,
+	network *dockertest.Network,
+	targetContainers []string,
+) error {
+	subnets := networkSubnets(network)
+	if len(subnets) == 0 {
+		return fmt.Errorf("RestorePartition: network %s: %w", network.Network.Name, errNoSubnets)
+	}
+
+	for _, name := range targetContainers {
+		containerID, err := lookupContainerID(pool, name)
+		if err != nil {
+			return fmt.Errorf("restore partition %s: %w", name, err)
+		}
+
+		iface, err := findContainerInterface(pool, name)
+		if err != nil {
+			return fmt.Errorf("restore partition %s: %w", name, err)
+		}
+
+		for _, subnet := range subnets {
+			// Reinstall the directly-connected route that
+			// Partition's blackhole replaced.
+			cmd := []string{"ip", "route", "replace", subnet, "dev", iface, "scope", "link"}
+
+			_, err = execStdout(pool, containerID, cmd)
+			if err != nil {
+				log.Printf("restore partition: route replace error for %s/%s: %v", name, subnet, err)
+			}
+		}
+
+		log.Printf("restored %s: reconnected to %d subnets via %s", name, len(subnets), iface)
 	}
 
 	return nil
