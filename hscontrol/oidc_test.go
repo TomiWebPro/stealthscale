@@ -261,3 +261,259 @@ func TestSetCSRFCookieSecure(t *testing.T) {
 	assert.False(t, plainRec.Result().Cookies()[0].Secure,
 		"plain-http server_url without req.TLS must not set Secure")
 }
+
+// oidcTestClaims builds fully-populated OIDCClaims so the
+// validators under test can be exercised without depending on
+// which optional claim fields matter.
+func oidcTestClaims(
+	email string,
+	emailVerified bool,
+	groups []string,
+) *types.OIDCClaims {
+	return &types.OIDCClaims{
+		Sub:               "test-sub",
+		Iss:               "test-issuer",
+		Name:              "Test User",
+		Groups:            types.FlexibleStringSlice(groups),
+		Email:             email,
+		EmailVerified:     types.FlexibleBoolean(emailVerified),
+		ProfilePictureURL: "",
+		Username:          "testuser",
+	}
+}
+
+// assertUnauthorized asserts err is an HTTPError carrying 401,
+// the status every allow-list rejection must surface as.
+func assertUnauthorized(t *testing.T, err error) {
+	t.Helper()
+
+	require.Error(t, err)
+
+	var httpErr HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+}
+
+// TestValidateOIDCAccessors pins the allow-list validators' failure
+// points: an unconfigured (empty) list must pass — matching the
+// documented contract and validateOIDCAllowedDomains — while a
+// configured list rejects the wrong domain/group/user with HTTP 401.
+// Regression: validateOIDCAllowedGroups/Users used to return
+// "unauthorised" even for an empty list, which would fail every
+// login for any future caller that skips the doOIDCAuthorization
+// guard.
+func TestValidateOIDCAccessors(t *testing.T) {
+	t.Run("domains", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			allowed []string
+			email   string
+			wantErr bool
+		}{
+			{
+				name:    "unconfigured list passes",
+				allowed: nil,
+				email:   "anyone@example.net",
+				wantErr: false,
+			},
+			{
+				name:    "matching domain passes",
+				allowed: []string{"test.com"},
+				email:   "user@test.com",
+				wantErr: false,
+			},
+			{
+				name:    "case-insensitive domain part is not folded",
+				allowed: []string{"test.com"},
+				email:   "user@TEST.com",
+				wantErr: true,
+			},
+			{
+				name:    "other domain rejected",
+				allowed: []string{"test.com"},
+				email:   "user@evil.example",
+				wantErr: true,
+			},
+			{
+				name:    "subdomain not implicitly allowed",
+				allowed: []string{"test.com"},
+				email:   "user@sub.test.com",
+				wantErr: true,
+			},
+			{
+				name:    "email without @ rejected",
+				allowed: []string{"test.com"},
+				email:   "not-an-email",
+				wantErr: true,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				err := validateOIDCAllowedDomains(
+					tc.allowed, oidcTestClaims(tc.email, true, nil))
+
+				if tc.wantErr {
+					assertUnauthorized(t, err)
+					return
+				}
+
+				require.NoError(t, err)
+			})
+		}
+	})
+
+	t.Run("groups", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			allowed []string
+			groups  []string
+			wantErr bool
+		}{
+			{
+				name:    "unconfigured list passes",
+				allowed: nil,
+				groups:  []string{"anything"},
+				wantErr: false,
+			},
+			{
+				name:    "member passes",
+				allowed: []string{"admins", "devs"},
+				groups:  []string{"users", "devs"},
+				wantErr: false,
+			},
+			{
+				name:    "non-member rejected",
+				allowed: []string{"admins"},
+				groups:  []string{"users"},
+				wantErr: true,
+			},
+			{
+				name:    "no groups at all rejected",
+				allowed: []string{"admins"},
+				groups:  nil,
+				wantErr: true,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				err := validateOIDCAllowedGroups(
+					tc.allowed, oidcTestClaims("user@test.com", true, tc.groups))
+
+				if tc.wantErr {
+					assertUnauthorized(t, err)
+					return
+				}
+
+				require.NoError(t, err)
+			})
+		}
+	})
+
+	t.Run("users", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			allowed []string
+			email   string
+			wantErr bool
+		}{
+			{
+				name:    "unconfigured list passes",
+				allowed: nil,
+				email:   "anyone@example.net",
+				wantErr: false,
+			},
+			{
+				name:    "listed user passes",
+				allowed: []string{"user@test.com"},
+				email:   "user@test.com",
+				wantErr: false,
+			},
+			{
+				name:    "unlisted user rejected",
+				allowed: []string{"user@test.com"},
+				email:   "other@test.com",
+				wantErr: true,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				err := validateOIDCAllowedUsers(
+					tc.allowed, oidcTestClaims(tc.email, true, nil))
+
+				if tc.wantErr {
+					assertUnauthorized(t, err)
+					return
+				}
+
+				require.NoError(t, err)
+			})
+		}
+	})
+}
+
+// TestDetermineNodeExpiry covers the OIDC token-expiry → node-expiry
+// mapping: with UseExpiryFromToken the node expires when the ID token
+// does (re-auth required after token expiry); without it the node has
+// no expiry. Failure mode: a misconfigured flag silently pins nodes
+// forever or expires them at token TTL.
+func TestDetermineNodeExpiry(t *testing.T) {
+	tokenExpiry := time.Date(2026, 10, 10, 5, 0, 0, 0, time.UTC)
+
+	a := &AuthProviderOIDC{
+		h:            nil,
+		serverURL:    "",
+		cfg:          oidcTestConfig(true),
+		authCache:    nil,
+		oidcProvider: nil,
+		oauth2Config: nil,
+	}
+
+	got := a.determineNodeExpiry(tokenExpiry)
+	require.NotNil(t, got,
+		"UseExpiryFromToken must propagate the ID token expiry to the node")
+	assert.Equal(t, tokenExpiry, *got)
+
+	a.cfg.UseExpiryFromToken = false
+	assert.Nil(t, a.determineNodeExpiry(tokenExpiry),
+		"without UseExpiryFromToken the node must not inherit the token expiry")
+}
+
+// oidcTestConfig builds a fully-populated OIDCConfig with only the
+// authorization-relevant fields set to non-zero values.
+func oidcTestConfig(useExpiryFromToken bool) *types.OIDCConfig {
+	return &types.OIDCConfig{
+		OnlyStartIfOIDCIsAvailable: false,
+		Issuer:                     "https://oidc.example.test",
+		ClientID:                   "test-client",
+		ClientSecret:               "",
+		Scope:                      nil,
+		ExtraParams:                nil,
+		AllowedDomains:             nil,
+		AllowedUsers:               nil,
+		AllowedGroups:              nil,
+		EmailVerifiedRequired:      false,
+		UseExpiryFromToken:         useExpiryFromToken,
+		PKCE:                       types.PKCEConfig{Enabled: false, Method: ""},
+	}
+}
+
+// TestDoOIDCAuthorizationUnverifiedEmailPassesWithoutEmailTests
+// pins the interaction between EmailVerifiedRequired and the email
+// allow-lists: an unverified email only fails when a domain/user
+// allow-list is configured; with no email tests configured there is
+// nothing to gate and authorization succeeds.
+func TestDoOIDCAuthorizationUnverifiedEmailPassesWithoutEmailTests(t *testing.T) {
+	cfg := oidcTestConfig(false)
+	cfg.EmailVerifiedRequired = true
+
+	claims := oidcTestClaims("user@test.com", false, nil)
+
+	require.NoError(t, doOIDCAuthorization(cfg, claims))
+
+	cfg.AllowedDomains = []string{"test.com"}
+	err := doOIDCAuthorization(cfg, claims)
+
+	require.Error(t, err,
+		"unverified email must fail once a domain allow-list is configured")
+
+	var httpErr HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+}

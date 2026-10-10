@@ -528,10 +528,16 @@ func validateOIDCAllowedDomains(
 // and that the user has one group in the list.
 // claims.Groups can be populated by adding a client scope named
 // 'groups' that contains group membership.
+// An empty allowedGroups means the check is not configured and
+// passes, mirroring [validateOIDCAllowedDomains].
 func validateOIDCAllowedGroups(
 	allowedGroups []string,
 	claims *types.OIDCClaims,
 ) error {
+	if len(allowedGroups) == 0 {
+		return nil
+	}
+
 	for _, group := range allowedGroups {
 		if slices.Contains(claims.Groups, group) {
 			return nil
@@ -543,10 +549,16 @@ func validateOIDCAllowedGroups(
 
 // validateOIDCAllowedUsers checks that if AllowedUsers is provided,
 // that the authenticated principal is part of that list.
+// An empty allowedUsers means the check is not configured and
+// passes, mirroring [validateOIDCAllowedDomains].
 func validateOIDCAllowedUsers(
 	allowedUsers []string,
 	claims *types.OIDCClaims,
 ) error {
+	if len(allowedUsers) == 0 {
+		return nil
+	}
+
 	if !slices.Contains(allowedUsers, claims.Email) {
 		return NewHTTPError(http.StatusUnauthorized, "unauthorised user", errOIDCAllowedUsers)
 	}
@@ -556,12 +568,13 @@ func validateOIDCAllowedUsers(
 
 // doOIDCAuthorization applies authorization tests to claims.
 //
-// The following tests are always applied:
+// Each test is applied only when its allow-list is provided:
 //
 // - [validateOIDCAllowedGroups]
 //
-// The following tests are applied if cfg.EmailVerifiedRequired=false
-// or claims.email_verified=true:
+// The email-based tests are additionally applied only if
+// cfg.EmailVerifiedRequired=false or claims.email_verified=true
+// (an unverified email never passes an email allow-list):
 //
 // - [validateOIDCAllowedDomains]
 // - [validateOIDCAllowedUsers]
