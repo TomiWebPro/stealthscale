@@ -669,3 +669,133 @@ func TestWebUI_DeleteNodeDelegatesToRealState(t *testing.T) {
 	code, _ = doDelete("/web/api/nodes/abc")
 	assert.Equal(t, http.StatusBadRequest, code)
 }
+
+// TestWebUI_CreateUserDelegatesToRealState pins the WebUI
+// user-creation endpoint (POST /web/api/users) against the
+// harness's real *state.State. The handler type-asserts
+// CreateUser(types.User) (*types.User, change.Change, error)
+// and silently answers 201 with a synthesized user when the
+// assertion fails — a signature drift in state.State.CreateUser
+// would report success while the user is never persisted (the
+// same silent-failure class as the delete-node and auth-finish
+// delegation tests in this file). Asserts: the created user is
+// persisted (GetUserByName), echoed in the response and listed
+// by GET /web/api/users; a duplicate name is rejected by the
+// users.name unique index without persisting a second user
+// (a distinct failure mode: the handler must surface the error,
+// not answer 201 for a user that does not exist); missing name
+// and malformed JSON -> 400.
+func TestWebUI_CreateUserDelegatesToRealState(t *testing.T) {
+	srv := NewServer(t)
+	defer srv.Close()
+
+	st := srv.State()
+
+	h := webui.Handler(&types.Config{}, st) //nolint:exhaustruct_v5 // test fixture: zero config
+
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	doCreate := func(body any) (int, map[string]any) {
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		req, err := http.NewRequestWithContext(
+			context.Background(), http.MethodPost,
+			ts.URL+"/web/api/users", bytes.NewReader(b))
+		require.NoError(t, err)
+
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+
+		defer resp.Body.Close()
+
+		out := map[string]any{}
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+
+		return resp.StatusCode, out
+	}
+
+	code, out := doCreate(map[string]string{
+		"name": "webui-create-user", "email": "webui-create@example.com",
+	})
+	require.Equal(t, http.StatusCreated, code, out)
+
+	user, ok := out["user"].(map[string]any)
+	require.True(t, ok, "response must carry the created user, got %v", out)
+	assert.Equal(t, "webui-create-user", user["Name"])
+
+	// The user is persisted in the live state — the stub
+	// fallback synthesizes a response without saving.
+	created, err := st.GetUserByName("webui-create-user")
+	require.NoError(t, err, "created user must be persisted in the live state")
+	assert.Equal(t, "webui-create@example.com", created.Email)
+
+	// And it is listed by the users endpoint.
+	listReq, err := http.NewRequestWithContext(
+		context.Background(), http.MethodGet, ts.URL+"/web/api/users", nil)
+	require.NoError(t, err)
+
+	resp, err := http.DefaultClient.Do(listReq)
+	require.NoError(t, err)
+
+	defer resp.Body.Close()
+
+	var list struct {
+		Users []map[string]any `json:"users"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
+
+	found := false
+
+	for _, u := range list.Users {
+		if u["name"] == "webui-create-user" {
+			found = true
+		}
+	}
+
+	assert.True(t, found, "created user must be listed by GET /web/api/users")
+
+	// Duplicate name: the partial unique index on
+	// users(name) WHERE provider_identifier IS NULL rejects
+	// it — the handler must surface the failure (500), not
+	// answer 201 for a user that was not created.
+	code, _ = doCreate(map[string]string{
+		"name": "webui-create-user", "email": "other@example.com",
+	})
+	assert.Equal(t, http.StatusInternalServerError, code)
+
+	all, err := st.ListAllUsers()
+	require.NoError(t, err)
+
+	count := 0
+
+	for _, u := range all {
+		if u.Name == "webui-create-user" {
+			count++
+		}
+	}
+
+	assert.Equal(t, 1, count, "duplicate creation must not persist a second user")
+
+	// Missing name -> 400.
+	code, _ = doCreate(map[string]string{"email": "noname@example.com"})
+	assert.Equal(t, http.StatusBadRequest, code)
+
+	// Malformed JSON -> 400.
+	malformed, err := http.NewRequestWithContext(
+		context.Background(), http.MethodPost,
+		ts.URL+"/web/api/users", bytes.NewReader([]byte("{invalid")))
+	require.NoError(t, err)
+
+	malformed.Header.Set("Content-Type", "application/json")
+
+	mresp, err := http.DefaultClient.Do(malformed)
+	require.NoError(t, err)
+
+	defer mresp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, mresp.StatusCode)
+}
