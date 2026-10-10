@@ -215,6 +215,73 @@ func TestDialVLESS_HungServerNoAck(t *testing.T) {
 	assert.Less(t, elapsed, 3*time.Second, "ack wait must respect the configured timeout")
 }
 
+func TestDialVLESS_HungServerRespectsContextBudget(t *testing.T) {
+	// The caller's context budget is the tighter bound:
+	// the endpoint URI may carry a long timeout (e.g. a
+	// 10s timeout= parameter) while the caller only
+	// waits 100ms. The ack read must respect the
+	// context budget, not the URI's — otherwise a
+	// silent endpoint stalls the dial for the full
+	// URI timeout after the caller has already given
+	// up (the slow/flaky-network failure mode at its
+	// slowest).
+	ln, err := net.Listen("tcp", "127.0.0.1:0") //nolint:noctx // test fixture
+	require.NoError(t, err)
+
+	defer ln.Close()
+
+	host, portStr, err := net.SplitHostPort(ln.Addr().String())
+	require.NoError(t, err)
+
+	port, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+
+	// Same draining-read black hole as
+	// TestDialVLESS_HungServerNoAck: accepts, never
+	// acks, never closes.
+	go func() {
+		conn, aerr := ln.Accept() //nolint:errcheck
+		if aerr != nil {
+			return
+		}
+
+		defer conn.Close()
+
+		buf := make([]byte, 64)
+		for {
+			_, rerr := conn.Read(buf) //nolint:errcheck
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+
+	u := uuid.Must(uuid.NewV4()).String()
+	//nolint:exhaustruct_v5 // test fixture: only the fields under test
+	cfg := &VLESSConfig{
+		ID:       u,
+		Address:  host,
+		Port:     port,
+		Security: "none",
+		// Long URI-carried timeout — the bug let this
+		// override the caller's budget.
+		Timeout: 10 * time.Second,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+
+	_, err = DialVLESS(ctx, cfg)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "dial to a silent endpoint must fail within the context budget")
+	require.ErrorContains(t, err, "reading VLESS ack")
+	assert.Less(t, elapsed, 2*time.Second,
+		"ack wait must respect the tighter context deadline, not the URI timeout")
+}
+
 func TestDialVLESS_InvalidConfig(t *testing.T) {
 	ctx := context.Background()
 	// nil config

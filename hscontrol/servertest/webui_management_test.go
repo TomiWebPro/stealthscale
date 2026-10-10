@@ -799,3 +799,82 @@ func TestWebUI_CreateUserDelegatesToRealState(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, mresp.StatusCode)
 }
+
+// TestWebUI_ExpiredAPIKeyRejected pins the
+// auth-expiry failure mode on the hardened Web UI
+// surface. Every other WebUI servertest mounts the
+// handler with a zero config, which leaves auth
+// disabled entirely (webui.Handler only validates
+// credentials under xray.stealth.enforce +
+// enforce_control), so a regression that dropped the
+// expiry check from the WebUI middleware path would
+// stay green. Under the hardened config — the
+// production default — a key that expired by the
+// clock or via the admin expire flow must be rejected
+// with 401, the same verdict the v1 API middleware
+// enforces for its surface
+// (TestAPIV1AuthMiddlewareExpiredKey). Both
+// credential forms (Authorization: Bearer and
+// X-API-Key) must refuse the expired key, because
+// the middleware accepts either.
+func TestWebUI_ExpiredAPIKeyRejected(t *testing.T) {
+	srv := NewServer(t)
+	defer srv.Close()
+
+	st := srv.State()
+
+	//nolint:exhaustruct_v5 // test fixture: only the auth-gating fields
+	cfg := &types.Config{XRay: types.XRayConfig{
+		Enabled: true,
+		Stealth: types.StealthConfig{Enforce: true, EnforceControl: true}, //nolint:exhaustruct_v5 // test fixture: only the auth-gating fields
+	}}
+
+	ts := httptest.NewServer(webui.Handler(cfg, st))
+	defer ts.Close()
+
+	status := func(header, value string) int {
+		req, err := http.NewRequestWithContext(
+			context.Background(), http.MethodGet, ts.URL+"/web/api/nodes", nil)
+		require.NoError(t, err)
+
+		if header != "" {
+			req.Header.Set(header, value)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+
+		defer resp.Body.Close()
+
+		return resp.StatusCode
+	}
+
+	// No credentials and garbage credentials: 401.
+	assert.Equal(t, http.StatusUnauthorized, status("", ""))
+	assert.Equal(t, http.StatusUnauthorized, status("Authorization", "Bearer garbage"))
+
+	// Live key: both credential forms answer 200.
+	liveKey, liveKeyRec, err := st.CreateAPIKey(nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusOK, status("Authorization", "Bearer "+liveKey))
+	assert.Equal(t, http.StatusOK, status("X-API-Key", liveKey))
+
+	// Key expired by the admin expire flow: 401 on
+	// both forms — the operator revoked it from the
+	// Web UI/CLI, so it must stop authenticating
+	// immediately.
+	require.NoError(t, st.ExpireAPIKey(liveKeyRec))
+
+	assert.Equal(t, http.StatusUnauthorized, status("Authorization", "Bearer "+liveKey))
+	assert.Equal(t, http.StatusUnauthorized, status("X-API-Key", liveKey))
+
+	// Key expired by the clock (created with a past
+	// expiry): 401 as well.
+	past := time.Now().Add(-time.Hour)
+
+	clockExpired, _, err := st.CreateAPIKey(&past)
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusUnauthorized, status("Authorization", "Bearer "+clockExpired))
+}

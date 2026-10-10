@@ -180,12 +180,12 @@ func DialVLESS(ctx context.Context, cfg *VLESSConfig) (net.Conn, error) {
 		conn.Close()
 		return nil, err
 	}
-	// Await server ack (single version byte).
-	if cfg.Timeout > 0 {
-		_ = conn.SetReadDeadline(time.Now().Add(cfg.Timeout))
-	} else {
-		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	}
+	// Await server ack (single version byte). The effective
+	// timeout — cfg.Timeout (10s when unset) tightened by any
+	// context deadline — bounds the wait. Reading cfg.Timeout
+	// directly would let a URI-carried long timeout outlive
+	// the caller's budget on a silent endpoint.
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	var ack [1]byte
 	if _, err := io.ReadFull(conn, ack[:]); err != nil {
 		conn.Close()
