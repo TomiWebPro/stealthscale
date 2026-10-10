@@ -597,8 +597,11 @@ func (h *StealthScale) createRouter(apiV1Mux, apiV2Mux http.Handler) *chi.Mux {
 	r.Get("/", BlankHandler)
 
 	// Embedded WebUI (headscale-ui style) — same codebase for server and client.
-	// Served at /web and /admin (alias).
-	webui.Register(r, h.cfg, h.state)
+	// Served at /web and /admin (alias). h.Change is the change sink: every
+	// WebUI write forwards the change its state call returned, so connected
+	// clients receive it on their live long-poll like the identical API
+	// v1/v2/gRPC operations.
+	webui.Register(r, h.cfg, h.state, h.Change)
 
 	return r
 }

@@ -3,6 +3,7 @@
 ## Unreleased — CLI: `stscale nodes vless --one-line` + single-command join flow
 
 - **CLI polish**: added `--one-line` flag to `stscale nodes vless <id>` — outputs only the raw `vless://` URI (no table headers), pipe-friendly for automation. Updated error message in `stscale up` to show a one-command shell example using subshell substitution. Updated docs in `docs/stealthscale/clients.md` and `up --help` examples. Closes issue `202610100145-vless-uri-copy-paste`.
+- **WebUI write propagation**: WebUI write endpoints (`DELETE /web/api/nodes/{id}`, `POST /web/api/nodes/{id}/{expire,rename,tags,routes}`, `POST /web/api/users`) now forward the `change.Change` their `state.State` call returns to the mapper batcher — `webui.Handler`/`webui.Register` accept an optional `ChangeFunc` sink, wired to `(*StealthScale).Change` in `createRouter` — so connected clients see the write on their live long-poll within the batch delay, like the identical API v1/v2/gRPC operations. Previously the write landed in state but connected peers kept the stale netmap (and a deleted node kept its batcher connection) until they reconnected. Regression coverage: `hscontrol/servertest/webui_change_test.go`. Closes issue `202610101736-webui-write-change-propagation`.
 
 ## 0.0.1-alpha.4 (2026-09-02) — Docker compatibility (full container support)
 

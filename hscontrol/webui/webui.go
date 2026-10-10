@@ -78,6 +78,26 @@ type (
 	}
 )
 
+// ChangeFunc receives the change a WebUI write produced so
+// it reaches the mapper batcher and connected clients. It
+// mirrors (*hscontrol.StealthScale).Change (hscontrol/app.go),
+// which is what the server passes when registering the UI.
+type ChangeFunc func(...change.Change)
+
+// propagateChange forwards the change a write handler's
+// state call returned to the change sink, so connected
+// clients receive the write on their live long-poll — the
+// same propagation the API v1/v2 and gRPC paths perform.
+// A nil sink (test fixtures, stub states) drops only the
+// broadcast: the write itself already landed in state.
+func propagateChange(onChange ChangeFunc, c change.Change) {
+	if onChange == nil {
+		return
+	}
+
+	onChange(c)
+}
+
 // errWebAuthRejected is the verdict handed to the waiting registration
 // flow when an auth session is rejected from the Web UI (mirrors
 // hscontrol/api/v1's errAuthRejected).
@@ -92,13 +112,23 @@ var (
 
 // Handler returns an http.Handler serving the WebUI at /web and /admin.
 // It serves embedded static assets and JSON APIs for management.
+// The optional onChange sink receives the change each write handler's
+// state call returns, so the write is broadcast to connected clients
+// (the mapper batcher) like the identical API v1/v2/gRPC operations;
+// without it (test fixtures, stub states) writes still land in state
+// and only the broadcast is skipped.
 // WebUI now always requires authentication via Authorization: Bearer <api-key>
 // or X-API-Key validated against state.ValidateAPIKey/AuthenticateAccessToken
 // (not just header presence). This prevents anonymous enumeration of
 // nodes/users even when xray.stealth.enforce_control is false (stock-client
 // compat) or xray.enabled is false. Operators who want the WebUI only on the
 // internal metrics listener should firewall the public port.
-func Handler(cfg *types.Config, st State) http.Handler {
+func Handler(cfg *types.Config, st State, onChange ...ChangeFunc) http.Handler {
+	var sink ChangeFunc
+	if len(onChange) > 0 {
+		sink = onChange[0]
+	}
+
 	mux := http.NewServeMux()
 	// Auth is gated on stealth hardening (xray.stealth.enforce && enforce_control) — when
 	// hardened, we now validate via ValidateAPIKey/AuthenticateAccessToken (not presence only).
@@ -228,7 +258,7 @@ func Handler(cfg *types.Config, st State) http.Handler {
 		case http.MethodGet:
 			handleNodes(w, r, cfg, st)
 		case http.MethodDelete:
-			handleDeleteNode(w, r, st)
+			handleDeleteNode(w, r, st, sink)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -237,7 +267,7 @@ func Handler(cfg *types.Config, st State) http.Handler {
 		_, action := pathIDAction(r.URL.Path, "nodes")
 		if action == "" {
 			if r.Method == http.MethodDelete {
-				handleDeleteNode(w, r, st)
+				handleDeleteNode(w, r, st, sink)
 				return
 			}
 
@@ -253,13 +283,13 @@ func Handler(cfg *types.Config, st State) http.Handler {
 
 		switch action {
 		case "expire":
-			handleNodeExpire(w, r, st)
+			handleNodeExpire(w, r, st, sink)
 		case "rename":
-			handleNodeRename(w, r, st)
+			handleNodeRename(w, r, st, sink)
 		case "tags":
-			handleNodeTags(w, r, st)
+			handleNodeTags(w, r, st, sink)
 		case "routes":
-			handleNodeRoutes(w, r, st)
+			handleNodeRoutes(w, r, st, sink)
 		default:
 			http.NotFound(w, r)
 		}
@@ -269,7 +299,7 @@ func Handler(cfg *types.Config, st State) http.Handler {
 		case http.MethodGet:
 			handleUsers(w, r, st)
 		case http.MethodPost:
-			handleCreateUser(w, r, st)
+			handleCreateUser(w, r, st, sink)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -405,9 +435,11 @@ func Handler(cfg *types.Config, st State) http.Handler {
 }
 
 // Register mounts the WebUI handler onto a chi router at /web and /admin.
-// Shared by server and client entrypoints — same code path.
-func Register(r chi.Router, cfg *types.Config, st State) {
-	h := Handler(cfg, st)
+// Shared by server and client entrypoints — same code path. The optional
+// onChange sink receives the change each write produces so it is broadcast
+// to connected clients (see [Handler]).
+func Register(r chi.Router, cfg *types.Config, st State, onChange ...ChangeFunc) {
+	h := Handler(cfg, st, onChange...)
 	r.Handle("/web", h)
 	r.Handle("/web/*", h)
 	r.Handle("/admin", h)
@@ -885,7 +917,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request, cfg *types.Config, st 
 	})
 }
 
-func handleCreateUser(w http.ResponseWriter, r *http.Request, st State) {
+func handleCreateUser(w http.ResponseWriter, r *http.Request, st State, onChange ChangeFunc) {
 	var req struct {
 		Name  string `json:"name"`
 		Email string `json:"email"`
@@ -902,11 +934,12 @@ func handleCreateUser(w http.ResponseWriter, r *http.Request, st State) {
 	if ws, ok := any(st).(interface {
 		CreateUser(types.User) (*types.User, change.Change, error)
 	}); ok {
-		u, _, err := ws.CreateUser(types.User{Name: req.Name, Email: req.Email})
+		u, c, err := ws.CreateUser(types.User{Name: req.Name, Email: req.Email})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		propagateChange(onChange, c)
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, map[string]any{"user": u})
 		return
@@ -1010,7 +1043,7 @@ func handleSetPolicy(w http.ResponseWriter, r *http.Request, st State) {
 	writeJSON(w, map[string]any{"status": "policy updated (stub — wire to state.SetPolicy)"})
 }
 
-func handleDeleteNode(w http.ResponseWriter, r *http.Request, st State) {
+func handleDeleteNode(w http.ResponseWriter, r *http.Request, st State, onChange ChangeFunc) {
 	// Extract node ID from /web/api/nodes/{id} or query ?id=
 	path := r.URL.Path
 	var idStr string
@@ -1041,10 +1074,12 @@ func handleDeleteNode(w http.ResponseWriter, r *http.Request, st State) {
 		found := false
 		for _, n := range st.ListNodes(nodeID).All() {
 			if n.ID() == nodeID {
-				if _, err := ws.DeleteNode(n); err != nil {
+				nodeChange, err := ws.DeleteNode(n)
+				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
+				propagateChange(onChange, nodeChange)
 				found = true
 				break
 			}
@@ -1100,7 +1135,7 @@ func idFromRequest(r *http.Request, collection string) (uint64, error) {
 	return id, nil
 }
 
-func handleNodeExpire(w http.ResponseWriter, r *http.Request, st State) {
+func handleNodeExpire(w http.ResponseWriter, r *http.Request, st State, onChange ChangeFunc) {
 	nodeID, err := idFromRequest(r, "nodes")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1138,11 +1173,12 @@ func handleNodeExpire(w http.ResponseWriter, r *http.Request, st State) {
 	}
 
 	if ws, ok := any(st).(nodeLifecycleWriter); ok {
-		_, _, err := ws.SetNodeExpiry(types.NodeID(nodeID), expiry)
+		_, c, err := ws.SetNodeExpiry(types.NodeID(nodeID), expiry)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		propagateChange(onChange, c)
 
 		display := req.Expiry
 		if display == "" {
@@ -1157,7 +1193,7 @@ func handleNodeExpire(w http.ResponseWriter, r *http.Request, st State) {
 	writeJSON(w, map[string]any{"status": "expiry set (stub — wire to state.State.SetNodeExpiry)", "nodeID": types.NodeID(nodeID).String()})
 }
 
-func handleNodeRename(w http.ResponseWriter, r *http.Request, st State) {
+func handleNodeRename(w http.ResponseWriter, r *http.Request, st State, onChange ChangeFunc) {
 	nodeID, err := idFromRequest(r, "nodes")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1185,11 +1221,12 @@ func handleNodeRename(w http.ResponseWriter, r *http.Request, st State) {
 	}
 
 	if ws, ok := any(st).(nodeLifecycleWriter); ok {
-		_, _, err := ws.RenameNode(types.NodeID(nodeID), req.Name)
+		_, c, err := ws.RenameNode(types.NodeID(nodeID), req.Name)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		propagateChange(onChange, c)
 
 		writeJSON(w, map[string]any{"status": "renamed", "nodeID": types.NodeID(nodeID).String(), "name": req.Name})
 
@@ -1199,7 +1236,7 @@ func handleNodeRename(w http.ResponseWriter, r *http.Request, st State) {
 	writeJSON(w, map[string]any{"status": "renamed (stub — wire to state.State.RenameNode)", "nodeID": types.NodeID(nodeID).String()})
 }
 
-func handleNodeTags(w http.ResponseWriter, r *http.Request, st State) {
+func handleNodeTags(w http.ResponseWriter, r *http.Request, st State, onChange ChangeFunc) {
 	nodeID, err := idFromRequest(r, "nodes")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1227,11 +1264,12 @@ func handleNodeTags(w http.ResponseWriter, r *http.Request, st State) {
 	}
 
 	if ws, ok := any(st).(nodeLifecycleWriter); ok {
-		_, _, err := ws.SetNodeTags(types.NodeID(nodeID), req.Tags)
+		_, c, err := ws.SetNodeTags(types.NodeID(nodeID), req.Tags)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		propagateChange(onChange, c)
 
 		writeJSON(w, map[string]any{"status": "tags set", "nodeID": types.NodeID(nodeID).String(), "tags": req.Tags})
 
@@ -1241,7 +1279,7 @@ func handleNodeTags(w http.ResponseWriter, r *http.Request, st State) {
 	writeJSON(w, map[string]any{"status": "tags set (stub — wire to state.State.SetNodeTags)", "nodeID": types.NodeID(nodeID).String()})
 }
 
-func handleNodeRoutes(w http.ResponseWriter, r *http.Request, st State) {
+func handleNodeRoutes(w http.ResponseWriter, r *http.Request, st State, onChange ChangeFunc) {
 	nodeID, err := idFromRequest(r, "nodes")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1275,11 +1313,12 @@ func handleNodeRoutes(w http.ResponseWriter, r *http.Request, st State) {
 	}
 
 	if ws, ok := any(st).(nodeLifecycleWriter); ok {
-		_, _, err := ws.SetApprovedRoutes(types.NodeID(nodeID), routes)
+		_, c, err := ws.SetApprovedRoutes(types.NodeID(nodeID), routes)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		propagateChange(onChange, c)
 
 		writeJSON(w, map[string]any{"status": "routes approved", "nodeID": types.NodeID(nodeID).String(), "routes": req.Routes})
 

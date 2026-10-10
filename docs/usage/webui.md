@@ -6,7 +6,7 @@ Visit `http://<server>:8080/web` or `http://<server>:8080/admin` (alias) — wor
 
 ## Features
 
-- **Nodes** — hostname, IPs, tags, VLESS UUID/port; per-node actions: expire (set an RFC3339 timestamp or `never`), rename, tag, and approve advertised routes
+- **Nodes** — hostname, IPs, tags, VLESS UUID/port; per-node actions: expire (set an RFC3339 timestamp or `never`), rename, tag, and approve advertised routes — each write is broadcast to connected clients immediately
 - **Users** — names, emails, providers; create users
 - **PreAuthKeys** — keys, reuse/ephemeral flags, expiry; create, expire and delete keys
 - **API Keys** — list (masked prefixes only), create (raw key shown once), expire and delete
@@ -40,13 +40,13 @@ When hardening is disabled, all endpoints serve JSON from the live `state.State`
 
 ```
 GET    /web/api/nodes        # list nodes
-DELETE /web/api/nodes/{id}   # delete node (delegates to `state.DeleteNode(NodeView)`, falls back to stub in tests)
+DELETE /web/api/nodes/{id}   # delete node (delegates to `state.DeleteNode(NodeView)`; its change is broadcast to connected clients — falls back to stub in tests)
 POST   /web/api/nodes/{id}/expire   # set node expiry {expiry: "<RFC3339>"|"never"} → `state.SetNodeExpiry`
 POST   /web/api/nodes/{id}/rename   # rename node {name} → `state.RenameNode`
 POST   /web/api/nodes/{id}/tags     # set node tags {tags: ["tag:..."]} → `state.SetNodeTags`
 POST   /web/api/nodes/{id}/routes   # set advertised routes {routes: ["10.0.0.0/24"]} → `state.SetApprovedRoutes`; an empty list clears all approved routes (same as `stscale nodes approve-routes -r ""` and the v1 API)
 GET    /web/api/users        # list users
-POST   /web/api/users        # create user {name, email} (delegates to `state.CreateUser` with Change)
+POST   /web/api/users        # create user {name, email} (delegates to `state.CreateUser`; its change is broadcast to connected clients)
 GET    /web/api/preauthkeys  # list pre-auth keys
 POST   /web/api/preauthkeys  # create pre-auth key {userID, reusable, ephemeral, aclTags, expiry} (delegates to `state.CreatePreAuthKey`)
 POST   /web/api/preauthkeys/{id}/expire  # expire pre-auth key → `state.ExpirePreAuthKey`
@@ -70,11 +70,11 @@ POST   /web/api/election     # coordinator election: {"mode": "auto"|"manual"} s
 GET    /web/api/health       # health + stealth status
 ```
 
-All write endpoints are available under both `/web/api/*` and `/admin/api/*` (alias). They validate JSON and, when the corresponding write method is implemented, delegate to `state.State` (e.g. `CreateUser`, `CreatePreAuthKey`, `SetPolicy`, `DeleteNode`, `SetNodeExpiry`, `RenameNode`, `SetNodeTags`, `SetApprovedRoutes`, `SetDERPMapRuntime`, `SetElectionMode`, `SetElectionPrimary`, `ExpirePreAuthKey`, `DeletePreAuthKey`, `CreateAPIKey`, `ExpireAPIKey`, `DestroyAPIKey`, and the auth-session verdicts). Otherwise they return stub success for coverage. Holepunching via DERP/STUN is exempt from the VLESS requirement and is only offered when stealth is satisfied.
+All write endpoints are available under both `/web/api/*` and `/admin/api/*` (alias). They validate JSON and, when the corresponding write method is implemented, delegate to `state.State` (e.g. `CreateUser`, `CreatePreAuthKey`, `SetPolicy`, `DeleteNode`, `SetNodeExpiry`, `RenameNode`, `SetNodeTags`, `SetApprovedRoutes`, `SetDERPMapRuntime`, `SetElectionMode`, `SetElectionPrimary`, `ExpirePreAuthKey`, `DeletePreAuthKey`, `CreateAPIKey`, `ExpireAPIKey`, `DestroyAPIKey`, and the auth-session verdicts) and forward the returned `change.Change` to connected clients (see the propagation notes below). Otherwise they return stub success for coverage. Holepunching via DERP/STUN is exempt from the VLESS requirement and is only offered when stealth is satisfied.
 
 ## Serving
 
-The UI is registered via `hscontrol/webui.Register(mux, cfg, state)` in `hscontrol/app.go:createRouter` and served by `hscontrol/webui.Handler` (Go `embed.FS` + file server). Both `stscale serve` and any client mode mount the same handler, so there is no difference in code.
+The UI is registered via `hscontrol/webui.Register(mux, cfg, state, onChange)` in `hscontrol/app.go:createRouter` — the `onChange` sink is `(*StealthScale).Change`, so every write the UI applies is broadcast to connected clients — and served by `hscontrol/webui.Handler` (Go `embed.FS` + file server). Both `stscale serve` and any client mode mount the same handler, so there is no difference in code.
 
 ## Reverse proxy and TLS
 
@@ -83,4 +83,4 @@ Terminate TLS at your reverse proxy and forward `/web` and `/` to the StealthSca
 
 > **Management parity:** node expire/rename/tag/approve-routes, pre-auth key expire/delete, API-key CRUD, auth approve/reject (SSH-check sessions — registration sessions complete via the node's auth URL), policy `check`, runtime DERP map apply, and VLESS endpoint settings submission are all reachable from the Web UI (see the API list above; implemented in `hscontrol/webui/webui.go`, tabs in `frontend/index.html`). WebUI stores the API key in `localStorage` and sends `Authorization: Bearer` (see `frontend/app.js:ensureAPIKey`). Hardened default requires `enforce && enforce_control` and validates via `ValidateAPIKey` (not presence only).
 
-> **Propagation notes:** a DERP map applied via `POST /web/api/derp` is live in the control-plane state immediately and is broadcast to connected clients right away (a `DERPMap` change). It takes precedence over configuration: while an operator-applied map is in effect, the periodic `derp.auto_update_enabled` refresh (default every 3h) skips its `derp.yaml`-derived map instead of reverting the operator's one — the applied map stays in effect until the server restarts. When `derp.server.enabled` and `derp.automatically_add_embedded_derp_region` are set, the embedded region is kept in applied maps. GET and POST responses report `runtime` (whether the live map is operator-applied). The stealth fail-closed gate is unaffected: when stealth is unsatisfied the map is stored but withheld from clients. Per-node VLESS endpoint settings are applied at runtime via `state.State.SetNodeVLESS`: the override is stored per node, the read paths (`GET /web/api/vless/{id}`, the node listing) report the overridden endpoint, and the node's VLESS listener is rebound to the overridden address/port — in-flight connections keep their deadline. A per-node security variant the server has no credentials for (e.g. a `tls` override on a `reality_xtls` server) fails closed on the transport rather than silently downgrading.
+> **Propagation notes:** every WebUI write is live end-to-end: node delete (`DELETE /nodes/{id}`), expiry, rename, tags and approved-routes updates (`POST /nodes/{id}/{expire,rename,tags,routes}`) and user creation (`POST /users`) forward the `change.Change` their `state.State` call returns to the mapper batcher, so connected clients receive the write on their live long-poll within the batch delay — no reconnect, no poll restart — exactly like the identical CLI and API v1/v2/gRPC operations (a node delete also tears down the deleted node's batcher connection through its `NodeRemoved` work item). A DERP map applied via `POST /web/api/derp` is live in the control-plane state immediately and is broadcast to connected clients right away (a `DERPMap` change). It takes precedence over configuration: while an operator-applied map is in effect, the periodic `derp.auto_update_enabled` refresh (default every 3h) skips its `derp.yaml`-derived map instead of reverting the operator's one — the applied map stays in effect until the server restarts. When `derp.server.enabled` and `derp.automatically_add_embedded_derp_region` are set, the embedded region is kept in applied maps. GET and POST responses report `runtime` (whether the live map is operator-applied). The stealth fail-closed gate is unaffected: when stealth is unsatisfied the map is stored but withheld from clients. Per-node VLESS endpoint settings are applied at runtime via `state.State.SetNodeVLESS`: the override is stored per node, the read paths (`GET /web/api/vless/{id}`, the node listing) report the overridden endpoint, and the node's VLESS listener is rebound to the overridden address/port — in-flight connections keep their deadline. A per-node security variant the server has no credentials for (e.g. a `tls` override on a `reality_xtls` server) fails closed on the transport rather than silently downgrading.

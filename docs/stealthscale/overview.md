@@ -203,7 +203,17 @@ done. It reflects the codebase at the time of writing:
   transport rules). Handlers validate JSON
   and delegate to `state.State` via type-asserted write interfaces
   (`any(st).(interface{...})`, so this package keeps no state import),
-  falling back to stubs for mocks. Every operation is reachable from the
+  falling back to stubs for mocks. Node and user writes are live
+  end-to-end: every write handler (`DELETE /nodes/{id}`,
+  `POST /nodes/{id}/{expire,rename,tags,routes}`, `POST /users`)
+  forwards the `change.Change` its `state.State` call returns to
+  the mapper batcher through the change sink `webui.Register`
+  receives (`(*StealthScale).Change`, wired in `createRouter`), so
+  connected clients receive the write on their live long-poll within
+  the batch delay — the same propagation the API v1/v2 and gRPC
+  paths perform (a node delete also tears down the deleted node's
+  batcher connection through its `NodeRemoved` work item). Every
+  operation is reachable from the
   Web UI itself — per-row actions plus the API Keys, Auth, Policy and
   Election tabs (the Election tab toggles the coordinator election mode
   and sets the fixed primary);
