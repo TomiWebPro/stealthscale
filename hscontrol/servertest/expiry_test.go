@@ -2,6 +2,7 @@ package servertest_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -216,6 +217,87 @@ func findPeerByID(nm *netmap.NetworkMap, id tailcfg.NodeID) (tailcfg.NodeView, b
 		}
 	}
 	return tailcfg.NodeView{}, false
+}
+
+// TestTaggedNodeManualExpiryViaAdmin verifies that when an admin calls
+// SetNodeExpiry on a tagged node (via the explicit admin path), the node
+// correctly sees itself as expired in its netmap and can be reactivated —
+// even though the logout handler (handleLogout) refuses to stamp expiry on
+// tagged nodes. This tests the "admin override" path through SetNodeExpiry.
+func TestTaggedNodeManualExpiryViaAdmin(t *testing.T) {
+	t.Parallel()
+
+	srv := servertest.NewServer(t)
+
+	// Create the tag owner user first (required for tagOwners policy).
+	tagOwner := srv.CreateUser(t, "tagowner")
+
+	// Tag owners who can claim the tag + ACL allowing all traffic.
+	srv.State().SetPolicy([]byte(`{
+		"tagOwners": {"tag:server": [` + fmt.Sprintf(`"user:%d"`, tagOwner.ID) + `]},
+		"acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}]
+	}`))
+
+	serverUser := srv.CreateUser(t, "servers")
+
+	nodeClient := servertest.NewClient(t, srv, "tagged-srv",
+		servertest.WithUser(serverUser),
+		servertest.WithTags("tag:server"))
+
+	// Verify the node registered successfully.
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		nm := nodeClient.Netmap()
+		assert.NotNil(c, nm)
+	}, 5*time.Second, 200*time.Millisecond)
+
+	st := srv.State()
+
+	// Find our tagged node in the NodeStore by hostname.
+	var nodeView types.NodeView
+	found := false
+	for _, n := range st.ListNodes().All() {
+		if n.Hostname() == "tagged-srv" {
+			nodeView = n
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "node must exist in store")
+	assert.True(t, nodeView.IsTagged(), "node must be tagged")
+
+	nodeID := nodeView.ID()
+
+	// Step 1: Confirm not expired initially.
+	require.NoError(t, nodeClient.RestartPoll(context.Background()))
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.False(c, nodeClient.Netmap().SelfNode.Expired(),
+			"newly registered tagged node should not be expired")
+	}, 5*time.Second, 200*time.Millisecond)
+
+	// Step 2: Admin expires the tagged node via SetNodeExpiry (the only way
+	// to expire a tagged node, since handleLogout refuses to do so).
+	expiredAt := time.Now().Add(-5 * time.Minute)
+	_, _, err := st.SetNodeExpiry(nodeID, &expiredAt)
+	require.NoError(t, err)
+
+	// Step 3: Verify the node sees itself as expired after refreshing.
+	require.NoError(t, nodeClient.RestartPoll(context.Background()))
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.True(c, nodeClient.Netmap().SelfNode.Expired(),
+			"admin-expired tagged node must see Expired=true in netmap")
+	}, 5*time.Second, 200*time.Millisecond)
+
+	// Step 4: Admin clears expiry; node recovers.
+	_, _, err = st.SetNodeExpiry(nodeID, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, nodeClient.RestartPoll(context.Background()))
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		nm := nodeClient.Netmap()
+		assert.NotNil(c, nm)
+		assert.False(c, nm.SelfNode.Expired(),
+			"cleared tagged node should no longer be expired")
+	}, 5*time.Second, 200*time.Millisecond)
 }
 
 // TestNodeExpirySelfAndPeerSimultaneously verifies that when a node is expired
