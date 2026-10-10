@@ -20,11 +20,11 @@ Future work is measured against these targets:
 1. **Unified server + client.** One binary does both. A device *is* a node; the
    same code that serves the coordination plane also runs on every endpoint. No
    separate "headscale" server binary and no patched/forked Tailscale client.
-2. **Everything is a node, coordinating peer-to-peer.** Nodes discover and
+1. **Everything is a node, coordinating peer-to-peer.** Nodes discover and
    authenticate each other and share state; they do not depend on a single
    controller. A coordinator is just a node that other nodes trust as the source
    of truth — and any node can take that role.
-3. **Stealth from first contact — no fake stealth.** The transport must be
+1. **Stealth from first contact — no fake stealth.** The transport must be
    genuinely fingerprint-resistant using **uTLS-shaped TLS with a decoy
    certificate (Reality-style)**. *Discovery* (finding a coordinator/peer for the
    first time) may use whatever it needs to, including non-stealth mechanisms. But
@@ -33,7 +33,7 @@ Future work is measured against these targets:
    is no "simulated" stealth: this is a deployable project, not a demo. (Full
    XTLS-Reality replay of a real destination's certificate is the target
    enhancement.)
-4. **The Web UI is the control plane.** It is not a read-only dashboard. Every
+1. **The Web UI is the control plane.** It is not a read-only dashboard. Every
    configurable aspect of the network — nodes, users, pre-auth keys, tags,
    policy (HuJSON), DERP, VLESS endpoints, coordinator election — must be
    configurable from the Web UI. We use
@@ -41,7 +41,7 @@ Future work is measured against these targets:
    [Headscale Web UI reference](https://headscale.net/stable/ref/integration/web-ui/)
    as **design guidelines and improve on them**: the StealthScale UI is embedded,
    talks to the live control plane, and is the primary management surface.
-5. **Deployable.** Defaults are safe and production-shaped; `make build` produces
+1. **Deployable.** Defaults are safe and production-shaped; `make build` produces
    a single binary that runs as a node or a coordinator out of the box.
 
 ## Why not WireGuard?
@@ -102,8 +102,7 @@ set explicitly for postgres so it survives restarts):
   tests).
 - Because the UUID and port are derived from the node ID + secret, they **never
   change across restarts when the secret is stable** — which is what makes a
-  static `vless://` URI (`pbk`, `sid`, `dest`, `fp`) possible (`stscale nodes
-  vless <id>`).
+  static `vless://` URI (`pbk`, `sid`, `dest`, `fp`) possible (`stscale nodes vless <id>`).
 
 When a peer connects (after discovery has identified it):
 

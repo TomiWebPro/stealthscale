@@ -38,41 +38,51 @@ StealthScale server at `/api/v1/docs` for details.
 
 === "Get details for all users"
 
-    ```console
-    curl -H "Authorization: Bearer <API_KEY>" \
-        https://stscale.example.com/api/v1/user
-    ```
+````
+```console
+curl -H "Authorization: Bearer <API_KEY>" \
+    https://stscale.example.com/api/v1/user
+```
+````
 
 === "Get details for user 'bob'"
 
-    ```console
-    curl -H "Authorization: Bearer <API_KEY>" \
-        https://stscale.example.com/api/v1/user?name=bob
-    ```
+````
+```console
+curl -H "Authorization: Bearer <API_KEY>" \
+    https://stscale.example.com/api/v1/user?name=bob
+```
+````
 
 === "Register a node"
 
-    ```console
-    curl -H "Authorization: Bearer <API_KEY>" \
-        --json '{"user": "<USER>", "authId": "<AUTH_ID>"}' \
-        https://stscale.example.com/api/v1/auth/register
-    ```
+````
+```console
+curl -H "Authorization: Bearer <API_KEY>" \
+    --json '{"user": "<USER>", "authId": "<AUTH_ID>"}' \
+    https://stscale.example.com/api/v1/auth/register
+```
+````
 
 === "Approve a pending SSH-check session"
 
-    ```console
-    curl -H "Authorization: Bearer <API_KEY>" \
-        --json '{"authId": "<AUTH_ID>"}' \
-        https://stscale.example.com/api/v1/auth/approve
-    ```
+````
+```console
+curl -H "Authorization: Bearer <API_KEY>" \
+    --json '{"authId": "<AUTH_ID>"}' \
+    https://stscale.example.com/api/v1/auth/approve
+```
+````
 
 === "Reject a pending SSH-check session"
 
-    ```console
-    curl -H "Authorization: Bearer <API_KEY>" \
-        --json '{"authId": "<AUTH_ID>"}' \
-        https://stscale.example.com/api/v1/auth/reject
-    ```
+````
+```console
+curl -H "Authorization: Bearer <API_KEY>" \
+    --json '{"authId": "<AUTH_ID>"}' \
+    https://stscale.example.com/api/v1/auth/reject
+```
+````
 
 `auth/approve` and `auth/reject` decide **SSH-check sessions** only.
 Node-registration sessions are refused with `409 Conflict`: complete a
@@ -104,33 +114,37 @@ The `stscale` binary can control a StealthScale instance from a remote machine o
 1. Provide the connection parameters for the remote StealthScale server either via a minimal YAML configuration file or
    via environment variables:
 
-    === "Minimal YAML configuration file"
+   === "Minimal YAML configuration file"
 
-        ```yaml title="config.yaml"
-        cli:
-            address: <STSCALE_URL>
-            api_key: <API_KEY>
-        ```
+   ````
+    ```yaml title="config.yaml"
+    cli:
+        address: <STSCALE_URL>
+        api_key: <API_KEY>
+    ```
+   ````
 
-    === "Environment variables"
+   === "Environment variables"
 
-        ```shell
-        export STSCALE_CLI_ADDRESS="<STSCALE_URL>"
-        export STSCALE_CLI_API_KEY="<API_KEY>"
-        ```
+   ````
+    ```shell
+    export STSCALE_CLI_ADDRESS="<STSCALE_URL>"
+    export STSCALE_CLI_API_KEY="<API_KEY>"
+    ```
+   ````
 
-    This instructs the `stscale` binary to connect to a remote instance at `<STSCALE_URL>` (e.g.
-    `https://stscale.example.com`), instead of connecting to the local instance. A bare host without a scheme is
-    assumed to be `https`.
+   This instructs the `stscale` binary to connect to a remote instance at `<STSCALE_URL>` (e.g.
+   `https://stscale.example.com`), instead of connecting to the local instance. A bare host without a scheme is
+   assumed to be `https`.
 
 1. Test the connection by listing all nodes:
 
-    ```shell
-    stscale nodes list
-    ```
+   ```shell
+   stscale nodes list
+   ```
 
-    You should now be able to see a list of your nodes from your workstation, and you can
-    now control the StealthScale server from your workstation.
+   You should now be able to see a list of your nodes from your workstation, and you can
+   now control the StealthScale server from your workstation.
 
 ### Behind a proxy
 
@@ -142,6 +156,6 @@ StealthScale with no extra setup.
 - Make sure you have the _same_ StealthScale version on your server and workstation.
 - Verify that your TLS certificate is valid and trusted.
 - If you don't have access to a trusted certificate (e.g. from Let's Encrypt), either:
-    - Add your self-signed certificate to the trust store of your OS _or_
-    - Disable certificate verification by either setting `cli.insecure: true` in the configuration file or by setting
-      `STSCALE_CLI_INSECURE=1` via an environment variable. We do **not** recommend to disable certificate validation.
+  - Add your self-signed certificate to the trust store of your OS _or_
+  - Disable certificate verification by either setting `cli.insecure: true` in the configuration file or by setting
+    `STSCALE_CLI_INSECURE=1` via an environment variable. We do **not** recommend to disable certificate validation.
