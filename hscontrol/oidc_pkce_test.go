@@ -141,3 +141,81 @@ func TestGetOauth2TokenWithoutPKCE(t *testing.T) {
 	require.NotNil(t, tok)
 	assert.Empty(t, got.CodeVerifier)
 }
+
+// newFailingTokenEndpointProvider builds an AuthProviderOIDC
+// whose token endpoint replies 500, simulating an IdP hiccup
+// (transient outage, bad gateway, malformed reply) during the
+// code exchange.
+func newFailingTokenEndpointProvider(t *testing.T) *AuthProviderOIDC {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "idp unavailable", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	//nolint:exhaustruct_v5 // partial literal is deliberate: only the exchange-relevant fields
+	return &AuthProviderOIDC{
+		//nolint:exhaustruct_v5 // partial literal is deliberate: only PKCE-relevant fields
+		cfg: &types.OIDCConfig{
+			ClientID: "test-client",
+			PKCE:     types.PKCEConfig{Enabled: true, Method: types.PKCEMethodS256},
+		},
+		authCache: expirable.NewLRU[string, AuthInfo](authCacheMaxEntries, nil, authCacheExpiration),
+		//nolint:exhaustruct_v5 // partial literal is deliberate: only TokenURL is used
+		oauth2Config: &oauth2.Config{
+			ClientID:     "test-client",
+			ClientSecret: "test-secret",
+			//nolint:exhaustruct_v5 // partial literal is deliberate: only TokenURL is used
+			Endpoint: oauth2.Endpoint{TokenURL: srv.URL},
+		},
+	}
+}
+
+// TestGetOauth2TokenIdPHiccupFailsClosed pins the IdP-hiccup
+// failure mode: when the IdP token endpoint errors (500, network
+// blip, non-JSON reply), the exchange must fail closed with a
+// 403 HTTPError wrapping the transport error — never a nil-token
+// success that would skip ID-token verification, and never a
+// panic. The caller (OIDCCallbackHandler) turns the HTTPError
+// into a user-facing error so the browser retry starts a fresh
+// flow instead of half-authenticating.
+func TestGetOauth2TokenIdPHiccupFailsClosed(t *testing.T) {
+	a := newFailingTokenEndpointProvider(t)
+
+	verifier := "test-verifier-value"
+	//nolint:exhaustruct_v5 // entry with verifier: the exchange must be attempted against the dead endpoint
+	a.authCache.Add("state-abc", AuthInfo{Verifier: &verifier})
+
+	tok, err := a.getOauth2Token(context.Background(), "auth-code", "state-abc")
+	require.Error(t, err)
+	assert.Nil(t, tok, "a failed exchange must not yield a token")
+
+	var httpErr HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusForbidden, httpErr.Code)
+	require.ErrorContains(t, httpErr.Err, "exchanging code for token")
+}
+
+// TestExtractIDTokenMissingFromTokenResponse pins the missing-
+// id_token failure mode: a token reply without an id_token (wrong
+// scopes, misconfigured client) is a 400 carrying
+// errNoOIDCIDToken — not a nil-deref on the provider and not a
+// half-verified login.
+func TestExtractIDTokenMissingFromTokenResponse(t *testing.T) {
+	var got pkceTokenRequest
+
+	// The provider's oidcProvider is nil; extractIDToken must
+	// return before touching it when the token carries no
+	// id_token.
+	a := newPKCETestProvider(t, &got)
+
+	//nolint:exhaustruct_v5 // partial literal is deliberate: only AccessToken matters, no id_token
+	_, err := a.extractIDToken(context.Background(), &oauth2.Token{AccessToken: "at"})
+	require.Error(t, err)
+
+	var httpErr HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	require.ErrorIs(t, err, errNoOIDCIDToken)
+}
