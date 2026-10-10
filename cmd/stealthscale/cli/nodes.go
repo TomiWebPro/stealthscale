@@ -61,6 +61,7 @@ func init() {
 	approveRoutesCmd.Flags().Uint64P("identifier", "i", 0, "Node identifier (ID)")
 	mustMarkRequired(approveRoutesCmd, "identifier")
 	approveRoutesCmd.Flags().StringSliceP("routes", "r", []string{}, `List of routes that will be approved (comma-separated, e.g. "10.0.0.0/8,192.168.0.0/24" or empty string to remove all approved routes)`)
+	approveRoutesCmd.Flags().Bool("all", false, `Approve every route the node currently announces (its "Available" routes from 'stscale nodes list-routes'), instead of passing --routes`)
 	nodeCmd.AddCommand(approveRoutesCmd)
 
 	nodeCmd.AddCommand(backfillNodeIPsCmd)
@@ -617,18 +618,58 @@ var approveRoutesCmd = &cobra.Command{
 	RunE: clientRunE(func(ctx context.Context, client *clientv1.ClientWithResponses, cmd *cobra.Command, args []string) error {
 		identifier, _ := cmd.Flags().GetUint64("identifier")
 		routes, _ := cmd.Flags().GetStringSlice("routes")
+		all, _ := cmd.Flags().GetBool("all")
 
-		resp, err := client.SetApprovedRoutesWithResponse(ctx, strconv.FormatUint(identifier, util.Base10), clientv1.SetApprovedRoutesJSONRequestBody{
-			Routes: &routes,
-		})
+		return runApproveRoutes(ctx, client, cmd, identifier, routes, all)
+	}),
+}
+
+// runApproveRoutes approves routes on a node. With all set it
+// approves every route the node currently announces (its
+// Available routes), collapsing the documented flow into a
+// single command with no copying out of `stscale nodes
+// list-routes`; otherwise the --routes list is applied
+// verbatim (an empty list clears all approved routes).
+func runApproveRoutes(
+	ctx context.Context,
+	client *clientv1.ClientWithResponses,
+	cmd *cobra.Command,
+	identifier uint64,
+	routes []string,
+	all bool,
+) error {
+	if all {
+		if len(routes) > 0 {
+			return fmt.Errorf("--all cannot be combined with --routes")
+		}
+
+		resp, err := client.GetNodeWithResponse(ctx, strconv.FormatUint(identifier, util.Base10))
 		if err != nil {
-			return fmt.Errorf("setting approved routes: %w", err)
+			return fmt.Errorf("getting node: %w", err)
 		}
 
 		if resp.StatusCode() != http.StatusOK {
 			return apiError(resp.StatusCode(), resp.ApplicationproblemJSONDefault)
 		}
 
-		return printOutput(cmd, resp.JSON200.Node, "Node updated")
-	}),
+		announced := resp.JSON200.Node.AvailableRoutes
+		if len(announced) == 0 {
+			return fmt.Errorf("node %q announces no routes to approve", resp.JSON200.Node.GivenName)
+		}
+
+		routes = announced
+	}
+
+	resp, err := client.SetApprovedRoutesWithResponse(ctx, strconv.FormatUint(identifier, util.Base10), clientv1.SetApprovedRoutesJSONRequestBody{
+		Routes: &routes,
+	})
+	if err != nil {
+		return fmt.Errorf("setting approved routes: %w", err)
+	}
+
+	if resp.StatusCode() != http.StatusOK {
+		return apiError(resp.StatusCode(), resp.ApplicationproblemJSONDefault)
+	}
+
+	return printOutput(cmd, resp.JSON200.Node, "Node updated")
 }

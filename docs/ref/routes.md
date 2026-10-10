@@ -55,6 +55,17 @@ $ stscale nodes approve-routes --identifier 1 --routes 10.0.0.0/8,192.168.0.0/24
 Node updated
 ```
 
+Or approve every route the node currently announces in a single command — no need to copy the
+prefixes out of the `list-routes` table:
+
+```console
+$ stscale nodes approve-routes --identifier 1 --all
+Node updated
+```
+
+`--all` fails when the node announces no routes, so it never clears a node's approved routes by
+accident; an empty `--routes` list, on the other hand, deliberately clears all approved routes.
+
 The node `myrouter` can now route the IPv4 networks `10.0.0.0/8` and `192.168.0.0/24` for the tailnet.
 
 ```console
@@ -183,6 +194,9 @@ For exit nodes, it is sufficient to approve either the IPv4 or IPv6 route. The o
 $ stscale nodes approve-routes --identifier 1 --routes 0.0.0.0/0
 Node updated
 ```
+
+`stscale nodes approve-routes --identifier 1 --all` also works here: it approves every announced
+route, and both exit routes end up approved either way.
 
 The node `myexit` is now approved as exit node for the tailnet:
 
