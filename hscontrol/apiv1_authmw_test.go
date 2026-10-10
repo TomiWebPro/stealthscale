@@ -53,6 +53,46 @@ func TestAPIV1AuthMiddleware(t *testing.T) {
 	}
 }
 
+// TestAPIV1AuthMiddlewareExpiredKey pins the auth-expiry
+// failure mode end to end: a Bearer key that was valid but
+// has since expired — by the clock or via the admin
+// ExpireAPIKey flow — must be rejected with 401 by the real
+// HTTP middleware. The DB-layer tests cover
+// db.ValidateAPIKey in isolation and the middleware tests
+// above only exercise never-valid tokens, so a regression
+// that dropped the expiry check from the middleware path
+// would stay green without this pin.
+func TestAPIV1AuthMiddlewareExpiredKey(t *testing.T) {
+	app := createTestApp(t)
+	handler := app.HTTPHandler()
+
+	// Key that expired by the clock: created with a past expiry.
+	past := time.Now().Add(-time.Hour)
+	clockExpired, _, err := app.state.CreateAPIKey(&past)
+	require.NoError(t, err)
+
+	// Key that expired via the admin "expire now" flow.
+	future := time.Now().Add(time.Hour)
+	adminExpired, apiKey, err := app.state.CreateAPIKey(&future)
+	require.NoError(t, err)
+	require.NoError(t, app.state.ExpireAPIKey(apiKey))
+
+	for _, key := range []string{clockExpired, adminExpired} {
+		req := httptest.NewRequestWithContext(
+			context.Background(), http.MethodGet, "/api/v1/node", nil,
+		)
+		req.Header.Set("Authorization", "Bearer "+key)
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		assert.Equalf(
+			t, http.StatusUnauthorized, rec.Code,
+			"expired key must be rejected with 401, body: %s", rec.Body.String(),
+		)
+	}
+}
+
 // TestAPIV1DocsArePublic proves the OpenAPI document and docs UI live under
 // /api/v1 and are reachable without an API key, while the operations beside them
 // stay key-gated. The docs page points at the versioned spec so a future
