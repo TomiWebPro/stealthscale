@@ -684,3 +684,86 @@ func TestNodeEndpointSecurityVariantFailsClosed(t *testing.T) {
 	_, err = io.ReadFull(conn, ack[:])
 	require.Error(t, err, "a security variant without server credentials must fail closed")
 }
+
+// TestEnsureNodeListenerRebindsOnSecurityVariant pins that
+// the effective security variant is part of the endpoint:
+// an override that keeps the derived address/port but
+// changes the security variant rebinds the listener, so the
+// transport serves the overridden variant instead of
+// silently keeping the old one (a none->tls upgrade that
+// stayed plaintext would be a silent downgrade — the API
+// reports the new variant either way).
+func TestEnsureNodeListenerRebindsOnSecurityVariant(t *testing.T) {
+	// A "none" server has no TLS or Reality credentials.
+	cfg := testXRayConfig()
+	server, err := NewServer(&cfg, func(conn net.Conn) {})
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	defer func() { _ = server.Shutdown(context.Background()) }()
+
+	nodeID := types.NodeID(1004)
+
+	derived, err := server.EnsureNodeListener(ctx, nodeID, nil)
+	require.NoError(t, err)
+
+	first := server.listeners[nodeID]
+	require.NotNil(t, first)
+	assert.Equal(t, "none", first.security)
+
+	// An override naming the same address and port but the
+	// tls variant: only the security differs.
+	override := &VLESSConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		ID:       NodeUUID(nodeID, ""),
+		Network:  "tcp",
+		Address:  derived.Address,
+		Port:     derived.Port,
+		Security: "tls",
+	}
+
+	_, err = server.EnsureNodeListener(ctx, nodeID, override)
+	require.NoError(t, err)
+
+	// The listener was rebound and now carries the
+	// overridden variant...
+	reb := server.listeners[nodeID]
+	require.NotNil(t, reb)
+	assert.NotSame(t, first, reb, "a security-only override must rebind the listener")
+	assert.Equal(t, "tls", reb.security)
+
+	// ...so the endpoint fails closed (no TLS credentials
+	// on this server) instead of acking the plain VLESS
+	// handshake it served before the override.
+	dialer := &net.Dialer{Timeout: time.Second} //nolint:exhaustruct_v5 // test fixture: only fields under test
+
+	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", cfg.ListenAddr, derived.Port))
+	require.NoError(t, err)
+
+	defer conn.Close()
+
+	_, err = conn.Write(vlessHeader(t, nodeID))
+	require.NoError(t, err)
+
+	var ack [1]byte
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, err = io.ReadFull(conn, ack[:])
+	require.Error(t, err, "the overridden security variant must be enforced: a server without TLS credentials must fail closed, not keep serving plain VLESS")
+
+	// An override matching the running endpoint and variant
+	// is still a no-op: no second rebind.
+	same := &VLESSConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		ID:       NodeUUID(nodeID, ""),
+		Network:  "tcp",
+		Address:  derived.Address,
+		Port:     derived.Port,
+		Security: "tls",
+	}
+
+	_, err = server.EnsureNodeListener(ctx, nodeID, same)
+	require.NoError(t, err)
+
+	assert.Same(t, reb, server.listeners[nodeID], "an unchanged endpoint and variant must not rebind")
+}

@@ -69,11 +69,11 @@ type Server struct {
 
 type nodeListener struct {
 	nodeID types.NodeID
-	// addr and security are the effective endpoint the
-	// listener serves: the per-node override when one is
-	// applied, the config-derived endpoint otherwise. They
-	// decide whether a new EnsureNodeListener call must
-	// rebind, and which security variant handleConn
+	// addr, port and security are the effective endpoint
+	// the listener serves: the per-node override when one
+	// is applied, the config-derived endpoint otherwise.
+	// They decide whether a new EnsureNodeListener call
+	// must rebind, and which security variant handleConn
 	// negotiates on this listener's connections.
 	addr     string
 	port     int
@@ -366,38 +366,16 @@ func (s *Server) NodeConfig(nodeID types.NodeID) *VLESSConfig {
 // already running, and returns the node's effective VLESS endpoint
 // configuration. override, when non-nil, is the operator-applied
 // per-node endpoint setting (state.NodeVLESS) and takes precedence
-// over the config-derived endpoint. When the effective endpoint
-// differs from the running listener's, the listener is rebound to
-// the new address/port: closing the old listener stops new accepts
-// only — in-flight connections are served by their own handleConn
-// goroutines and keep their deadline.
+// over the config-derived endpoint. When the effective endpoint —
+// address, port or security variant — differs from the running
+// listener's, the listener is rebound to the new endpoint: closing
+// the old listener stops new accepts only — in-flight connections
+// are served by their own handleConn goroutines and keep their
+// deadline.
 func (s *Server) EnsureNodeListener(ctx context.Context, nodeID types.NodeID, override *VLESSConfig) (*VLESSConfig, error) {
 	config := s.NodeConfig(nodeID)
 	if override != nil {
 		config = override
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if nl, ok := s.listeners[nodeID]; ok {
-		if nl.addr == config.Address && nl.port == config.Port {
-			return config, nil
-		}
-		// Effective endpoint changed: rebind. The old listener's
-		// accept loop exits on its own (cancel + close); established
-		// connections are left untouched.
-		nl.cancel()
-		_ = nl.ln.Close()
-
-		delete(s.listeners, nodeID)
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	ln, err := net.Listen("tcp", net.JoinHostPort(config.Address, fmt.Sprintf("%d", config.Port)))
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("listening for node %d on port %d: %w", nodeID, config.Port, err)
 	}
 
 	// The listener's security variant drives the
@@ -419,6 +397,29 @@ func (s *Server) EnsureNodeListener(ctx context.Context, nodeID types.NodeID, ov
 		sec = "none"
 	case "reality":
 		sec = "reality_xtls"
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if nl, ok := s.listeners[nodeID]; ok {
+		if nl.addr == config.Address && nl.port == config.Port && nl.security == sec {
+			return config, nil
+		}
+		// Effective endpoint changed: rebind. The old listener's
+		// accept loop exits on its own (cancel + close); established
+		// connections are left untouched.
+		nl.cancel()
+		_ = nl.ln.Close()
+
+		delete(s.listeners, nodeID)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	ln, err := net.Listen("tcp", net.JoinHostPort(config.Address, fmt.Sprintf("%d", config.Port)))
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("listening for node %d on port %d: %w", nodeID, config.Port, err)
 	}
 
 	nl := &nodeListener{
