@@ -524,6 +524,77 @@ func TestTS2021Route_AcceptsGETAndPOST(t *testing.T) {
 	}
 }
 
+// TestGetAndValidateNode_StaleNodeKeyAfterRotation pins the
+// key-rotation failure mode at the poll-time gate. A client
+// rotates its NodeKey when it re-registers (the normal
+// `tailscale up` after state loss): same machine key, NEW
+// node key. After the rotation, a MapRequest bearing the OLD
+// node key — a stale client, or an attacker replaying a
+// pre-rotation request — must be rejected by
+// [noiseServer.getAndValidateNode], the gate every
+// /machine/map poll passes through, with 404: the NodeStore's
+// node-key index maps only the rotated key. Were the spent
+// key still indexed, the stale client would keep being served
+// netmaps without ever re-authenticating.
+func TestGetAndValidateNode_StaleNodeKeyAfterRotation(t *testing.T) {
+	t.Parallel()
+
+	app := createTestApp(t)
+	user := app.state.CreateUserForTest("stale-key-user")
+	uid := types.UserID(user.ID)
+
+	machineKey := key.NewMachine().Public()
+	nodeKey1 := key.NewNode().Public()
+	nodeKey2 := key.NewNode().Public()
+
+	reusable, err := app.state.CreatePreAuthKey(&uid, true, false, nil, nil)
+	require.NoError(t, err)
+
+	regReq := func(nodeKey key.NodePublic) tailcfg.RegisterRequest {
+		return tailcfg.RegisterRequest{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+			NodeKey:  nodeKey,
+			Hostinfo: &tailcfg.Hostinfo{Hostname: "stale-key"},             //nolint:exhaustruct_v5 // test fixture
+			Auth:     &tailcfg.RegisterResponseAuth{AuthKey: reusable.Key}, //nolint:exhaustruct_v5 // test fixture
+		}
+	}
+
+	// Initial registration with nodeKey1.
+	_, _, err = app.state.HandleNodeFromPreAuthKey(regReq(nodeKey1), machineKey)
+	require.NoError(t, err, "initial registration must succeed")
+
+	// The Noise session is bound to the machine key; every
+	// map poll is gated by getAndValidateNode.
+	ns := &noiseServer{stealthscale: app, machineKey: machineKey}
+
+	// Baseline: the live node key authenticates.
+	nv, err := ns.getAndValidateNode(tailcfg.MapRequest{NodeKey: nodeKey1})
+	require.NoError(t, err, "the live node key must authenticate at poll time")
+	assert.Equal(t, machineKey, nv.MachineKey(), "poll gate must return the machine-bound node")
+
+	// Rotate the node key the way a real client does:
+	// re-register with a NEW NodeKey, same machine key,
+	// valid reusable pre-auth key.
+	rotated, _, err := app.state.HandleNodeFromPreAuthKey(regReq(nodeKey2), machineKey)
+	require.NoError(t, err, "node-key rotation with a valid reusable key must succeed")
+	assert.Equal(t, nodeKey2, rotated.NodeKey(), "rotation must swap the stored node key")
+
+	// Failure mode: the rotated-away node key must not
+	// authenticate — rejected as "node not found" (404).
+	_, err = ns.getAndValidateNode(tailcfg.MapRequest{NodeKey: nodeKey1})
+	require.Error(t, err, "the rotated-away node key must not authenticate at poll time")
+
+	var httpErr HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusNotFound, httpErr.Code,
+		"a stale node key must be a 404, not a silent accept")
+
+	// The rotated key still authenticates: rotation must not
+	// lock the node out of its own polls.
+	nv, err = ns.getAndValidateNode(tailcfg.MapRequest{NodeKey: nodeKey2})
+	require.NoError(t, err, "the rotated node key must authenticate at poll time")
+	assert.Equal(t, machineKey, nv.MachineKey(), "rotated node must keep its machine-key identity")
+}
+
 // newSSHActionFollowUpRequest is like newSSHActionRequest but carries the
 // auth_id query parameter that marks a follow-up poll.
 func newSSHActionFollowUpRequest(t *testing.T, src, dst types.NodeID, authID types.AuthID) *http.Request {
