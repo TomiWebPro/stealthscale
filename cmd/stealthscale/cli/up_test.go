@@ -248,3 +248,30 @@ func TestUpAddressOverrideAppliesToFetchedEndpoint(t *testing.T) {
 	assert.Contains(t, err.Error(), "stscale nodes vless")
 	assert.NotContains(t, err.Error(), "--verbose")
 }
+
+// TestPendingRegistrationMessageSurfacesAuthURL pins that a
+// pending registration surfaces the coordinator's registration
+// URL verbatim: the URL embeds the auth ID and is the only
+// handle the operator has on the pending session — opening it
+// renders the exact `stealthscale auth register --auth-id
+// <id> --user <user>` command (web provider) or the OIDC
+// confirmation interstitial. A generic hint instead sends the
+// operator hunting for the auth ID in the Web UI. An empty
+// URL (the server minted none, e.g. an expired node key)
+// must fall back to the generic hint — never print an empty
+// URL.
+func TestPendingRegistrationMessageSurfacesAuthURL(t *testing.T) {
+	t.Parallel()
+
+	authURL := "http://ctl.example.com/register/0123456789abcdef"
+
+	assert.Equal(t,
+		"register response: machine not yet authorized. Complete the registration at: "+authURL,
+		pendingRegistrationMessage(authURL),
+		"the registration URL must be surfaced verbatim so the operator can act on it")
+
+	assert.Equal(t,
+		"register response: machine not yet authorized (check authkey or approve via coordinator)",
+		pendingRegistrationMessage(""),
+		"no URL minted: fall back to the generic hint, never an empty URL")
+}

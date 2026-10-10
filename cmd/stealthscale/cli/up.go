@@ -262,7 +262,7 @@ Examples:
 			return fmt.Errorf("register error: %s", regResp.Error)
 		}
 		if !regResp.MachineAuthorized {
-			pterm.Warning.Println("register response: machine not yet authorized (check authkey or approve via coordinator)")
+			pterm.Warning.Println(pendingRegistrationMessage(regResp.AuthURL))
 		}
 		if regResp.NodeKeyExpired {
 			return fmt.Errorf("register response: node key expired")
@@ -280,6 +280,26 @@ Examples:
 		pterm.Success.Println("node is ready to serve as coordinator+client (unified). Run 'stscale serve' on this host to also coordinate.")
 		return nil
 	},
+}
+
+// pendingRegistrationMessage renders the warning shown when the
+// coordinator has not authorized the registration yet. The
+// response's AuthURL is the node's registration URL — it embeds
+// the auth ID and is the only handle the operator has on the
+// pending session (opening it renders the exact
+// `stealthscale auth register --auth-id <id> --user <user>`
+// command for the web provider, or the OIDC confirmation
+// interstitial; the approve/reject endpoints deliberately refuse
+// registration sessions), so it must be surfaced verbatim
+// instead of a generic hint that sends the operator hunting for
+// the auth ID.
+func pendingRegistrationMessage(authURL string) string {
+	if authURL == "" {
+		return "register response: machine not yet authorized (check authkey or approve via coordinator)"
+	}
+
+	return "register response: machine not yet authorized. Complete the registration at: " +
+		authURL
 }
 
 func loadOrCreateMachineKey(stateDir string) (key.MachinePrivate, error) {
