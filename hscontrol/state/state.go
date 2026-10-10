@@ -35,6 +35,7 @@ import (
 	"github.com/tomiwebpro/stealthscale/hscontrol/types/change"
 	"github.com/tomiwebpro/stealthscale/hscontrol/util"
 	"github.com/tomiwebpro/stealthscale/hscontrol/util/zlog/zf"
+	"github.com/tomiwebpro/stealthscale/hscontrol/xray"
 	"gorm.io/gorm"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -165,6 +166,18 @@ type State struct {
 	// derpMapListeners run after every DERP map store so
 	// dependents (the mapper batcher) learn of the change.
 	derpMapListeners []func()
+
+	// vlessMu guards vlessOverrides and vlessListeners.
+	vlessMu sync.Mutex
+	// vlessOverrides holds operator-applied per-node VLESS
+	// endpoint settings (Web UI runtime apply); a node absent
+	// from the map uses its config-derived endpoint.
+	vlessOverrides map[types.NodeID]*xray.VLESSConfig
+	// vlessListeners run after every per-node VLESS override
+	// store or clear so the transport rebinds the node's
+	// VLESS listener.
+	vlessListeners []func(types.NodeID) error
+
 	// polMan handles policy evaluation and management
 	polMan policy.PolicyManager
 
@@ -304,6 +317,8 @@ func NewState(cfg *types.Config) (*State, error) {
 		nodeStore: nodeStore,
 		pings:     newPingTracker(),
 		election:  NewElectionState(),
+
+		vlessOverrides: make(map[types.NodeID]*xray.VLESSConfig),
 
 		sshCheckAuth:  make(map[sshCheckPair]time.Time),
 		registerLocks: xsync.NewMap[key.MachinePublic, *sync.Mutex](),

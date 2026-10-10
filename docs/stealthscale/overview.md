@@ -216,12 +216,17 @@ done. It reflects the codebase at the time of writing:
   clients immediately, and while an operator-applied map is in effect
   the config-derived `SetDERPMap` path (startup load and the
   auto-update ticker) is ignored so the operator's map stands until
-  the process restarts. Remaining goal-#4 gap: the runtime mechanism
-  behind per-node VLESS endpoint overrides (per-node state store,
-  listener rebind) — the `POST /vless/{id}` surface above validates
-  and delegates to `state.SetNodeVLESS` once the mechanism lands
-  (follow-up work item
-  `202610101302-vless-per-node-endpoint-override-mechanism`).
+  the process restarts. Per-node VLESS endpoint overrides are
+  likewise live end-to-end: `POST /vless/{id}` delegates to
+  `state.SetNodeVLESS` (a per-node override store consulted by
+  the read paths), the `state.OnNodeVLESSChange` listeners
+  (registered wherever the transport starts) rebind the node's
+  VLESS listener to the overridden address/port — in-flight
+  connections keep their deadline — and the node's effective
+  security variant is enforced on the transport, failing closed
+  when the server has no credentials for it. Goal #4 is now
+  fully met: every listed aspect is configurable from the
+  Web UI.
 - **VLESS stealth transport implemented via true Reality.**
   `hscontrol/xray/server.go` uses `github.com/xtls/reality` (`reality.Config`,
   `reality.Server`, `reality.DetectPostHandshakeRecordsLens`) to steal the

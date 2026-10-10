@@ -26,9 +26,8 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	reality "github.com/xtls/reality"
-
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
+	reality "github.com/xtls/reality"
 )
 
 func primeRealityLens(key string) {
@@ -188,7 +187,7 @@ func TestServerAcceptsValidNode(t *testing.T) {
 	defer cancel()
 	defer server.Shutdown(context.Background())
 
-	config, err := server.EnsureNodeListener(ctx, nodeID)
+	config, err := server.EnsureNodeListener(ctx, nodeID, nil)
 	require.NoError(t, err)
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", cfg.ListenAddr, config.Port), time.Second)
@@ -237,7 +236,7 @@ func TestServerRejectsWrongUUID(t *testing.T) {
 	defer cancel()
 	defer server.Shutdown(context.Background())
 
-	config, err := server.EnsureNodeListener(ctx, nodeID)
+	config, err := server.EnsureNodeListener(ctx, nodeID, nil)
 	require.NoError(t, err)
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", cfg.ListenAddr, config.Port), time.Second)
@@ -269,9 +268,9 @@ func TestServerEnsureListenerIdempotent(t *testing.T) {
 	defer cancel()
 	defer server.Shutdown(context.Background())
 
-	_, err = server.EnsureNodeListener(ctx, types.NodeID(1))
+	_, err = server.EnsureNodeListener(ctx, types.NodeID(1), nil)
 	require.NoError(t, err)
-	_, err = server.EnsureNodeListener(ctx, types.NodeID(1))
+	_, err = server.EnsureNodeListener(ctx, types.NodeID(1), nil)
 	require.NoError(t, err, "second EnsureNodeListener must be a no-op")
 }
 
@@ -283,7 +282,7 @@ func TestServerShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, err = server.EnsureNodeListener(ctx, types.NodeID(2))
+	_, err = server.EnsureNodeListener(ctx, types.NodeID(2), nil)
 	require.NoError(t, err)
 
 	done := make(chan error, 1)
@@ -406,7 +405,7 @@ func TestServerRealityTLSRoundTrip(t *testing.T) {
 	defer cancel()
 	defer server.Shutdown(context.Background())
 
-	config, err := server.EnsureNodeListener(ctx, nodeID)
+	config, err := server.EnsureNodeListener(ctx, nodeID, nil)
 	require.NoError(t, err)
 
 	clientCfg := &VLESSConfig{
@@ -477,3 +476,211 @@ type dummyAddr string
 
 func (a dummyAddr) Network() string { return "test" }
 func (a dummyAddr) String() string  { return string(a) }
+
+// TestEnsureNodeListenerRebindsOnOverride pins the
+// per-node endpoint override on the transport: a
+// listener started for the derived endpoint is
+// rebound when a per-node override names a different
+// port, and the derived endpoint stops accepting.
+func TestEnsureNodeListenerRebindsOnOverride(t *testing.T) {
+	cfg := testXRayConfig()
+	server, err := NewServer(&cfg, func(conn net.Conn) {})
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	defer func() { _ = server.Shutdown(context.Background()) }()
+
+	nodeID := types.NodeID(1001)
+
+	derived, err := server.EnsureNodeListener(ctx, nodeID, nil)
+	require.NoError(t, err)
+
+	// A second call with the same effective endpoint is
+	// a no-op: the listener is not rebound.
+	first := server.listeners[nodeID]
+
+	again, err := server.EnsureNodeListener(ctx, nodeID, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, derived.Port, again.Port)
+	assert.Same(t, first, server.listeners[nodeID], "same effective endpoint must not rebind")
+
+	// An override on a different port rebinds the listener.
+	overridePort := derived.Port + 50
+
+	override := &VLESSConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		ID:       NodeUUID(nodeID, ""),
+		Network:  "tcp",
+		Address:  cfg.ListenAddr,
+		Port:     overridePort,
+		Security: "none",
+	}
+
+	reb, err := server.EnsureNodeListener(ctx, nodeID, override)
+	require.NoError(t, err)
+
+	assert.Equal(t, overridePort, reb.Port)
+
+	// The derived endpoint no longer accepts...
+	derivedDialer := &net.Dialer{Timeout: 250 * time.Millisecond} //nolint:exhaustruct_v5 // test fixture: only fields under test
+
+	_, err = derivedDialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", cfg.ListenAddr, derived.Port))
+	require.Error(t, err, "the derived endpoint must stop accepting after the rebind")
+
+	// ...and the overridden endpoint serves the VLESS handshake.
+	overrideDialer := &net.Dialer{Timeout: 2 * time.Second} //nolint:exhaustruct_v5 // test fixture: only fields under test
+
+	conn, err := overrideDialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", cfg.ListenAddr, overridePort))
+	require.NoError(t, err)
+
+	defer conn.Close()
+
+	_, err = conn.Write(vlessHeader(t, nodeID))
+	require.NoError(t, err)
+
+	var ack [1]byte
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, err = io.ReadFull(conn, ack[:])
+	require.NoError(t, err, "the rebound listener must serve the VLESS handshake")
+
+	assert.Equal(t, uint8(vlessVersion), ack[0])
+}
+
+// TestEnsureNodeListenerInFlightSurvivesRebind pins
+// that rebinding a node's listener (a per-node
+// endpoint override with a changed port) does not
+// disturb in-flight connections: an established,
+// handshaked VLESS stream keeps its deadline and
+// keeps carrying payload.
+func TestEnsureNodeListenerInFlightSurvivesRebind(t *testing.T) {
+	cfg := testXRayConfig()
+	handlerCalls := make(chan string, 1)
+
+	server, err := NewServer(&cfg, func(conn net.Conn) {
+		payload, err := io.ReadAll(conn)
+		require.NoError(t, err)
+
+		handlerCalls <- string(payload)
+	})
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	defer func() { _ = server.Shutdown(context.Background()) }()
+
+	nodeID := types.NodeID(1002)
+
+	derived, err := server.EnsureNodeListener(ctx, nodeID, nil)
+	require.NoError(t, err)
+
+	dialer := &net.Dialer{Timeout: time.Second} //nolint:exhaustruct_v5 // test fixture: only fields under test
+
+	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", cfg.ListenAddr, derived.Port))
+	require.NoError(t, err)
+
+	defer conn.Close()
+
+	// Complete the VLESS handshake on the derived endpoint.
+	_, err = conn.Write(vlessHeader(t, nodeID))
+	require.NoError(t, err)
+
+	var ack [1]byte
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, err = io.ReadFull(conn, ack[:])
+	require.NoError(t, err, "server should ack the VLESS handshake")
+
+	// Rebind to an overridden port while the connection is open.
+	override := &VLESSConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		ID:       NodeUUID(nodeID, ""),
+		Network:  "tcp",
+		Address:  cfg.ListenAddr,
+		Port:     derived.Port + 50,
+		Security: "none",
+	}
+
+	_, err = server.EnsureNodeListener(ctx, nodeID, override)
+	require.NoError(t, err)
+
+	// The in-flight connection keeps its deadline: it is not
+	// closed by the rebind, so a read blocks until the
+	// deadline instead of returning EOF as a torn-down
+	// stream would.
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(250*time.Millisecond)))
+
+	_, err = conn.Read(make([]byte, 1))
+
+	var netErr net.Error
+
+	require.ErrorAs(t, err, &netErr)
+	assert.True(t, netErr.Timeout(), "in-flight connection must keep its deadline across the rebind")
+
+	// The stream still carries payload to the handler.
+	_, err = conn.Write([]byte("still-alive"))
+	require.NoError(t, err)
+
+	tcpConn, ok := conn.(*net.TCPConn)
+	require.True(t, ok)
+
+	require.NoError(t, tcpConn.CloseWrite())
+
+	select {
+	case got := <-handlerCalls:
+		assert.Equal(t, "still-alive", got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler was never invoked on the in-flight connection")
+	}
+}
+
+// TestNodeEndpointSecurityVariantFailsClosed pins that
+// a per-node endpoint override naming a security
+// variant the server has no credentials for fails
+// closed: the connection is closed without the VLESS
+// ack instead of being silently downgraded to plain
+// VLESS.
+func TestNodeEndpointSecurityVariantFailsClosed(t *testing.T) {
+	// A "none" server has no TLS or Reality credentials.
+	cfg := testXRayConfig()
+	server, err := NewServer(&cfg, func(conn net.Conn) {})
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	defer func() { _ = server.Shutdown(context.Background()) }()
+
+	nodeID := types.NodeID(1003)
+
+	override := &VLESSConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		ID:       NodeUUID(nodeID, ""),
+		Network:  "tcp",
+		Address:  cfg.ListenAddr,
+		Port:     20050,
+		Security: "tls",
+	}
+
+	_, err = server.EnsureNodeListener(ctx, nodeID, override)
+	require.NoError(t, err)
+
+	dialer := &net.Dialer{Timeout: time.Second} //nolint:exhaustruct_v5 // test fixture: only fields under test
+
+	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", cfg.ListenAddr, 20050))
+	require.NoError(t, err)
+
+	defer conn.Close()
+
+	_, err = conn.Write(vlessHeader(t, nodeID))
+	require.NoError(t, err)
+
+	// The server must close the stream without acking: a
+	// silent downgrade to plain VLESS would ack here.
+	var ack [1]byte
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, err = io.ReadFull(conn, ack[:])
+	require.Error(t, err, "a security variant without server credentials must fail closed")
+}

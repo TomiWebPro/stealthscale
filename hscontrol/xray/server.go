@@ -20,13 +20,12 @@ import (
 	"sync"
 	"time"
 
-	reality "github.com/xtls/reality"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	utls "github.com/refraction-networking/utls"
 	"github.com/rs/zerolog/log"
-
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
+	reality "github.com/xtls/reality"
 )
 
 var (
@@ -70,10 +69,18 @@ type Server struct {
 
 type nodeListener struct {
 	nodeID types.NodeID
-	port   int
-	ln     net.Listener
-	cancel context.CancelFunc
-	done   chan struct{}
+	// addr and security are the effective endpoint the
+	// listener serves: the per-node override when one is
+	// applied, the config-derived endpoint otherwise. They
+	// decide whether a new EnsureNodeListener call must
+	// rebind, and which security variant handleConn
+	// negotiates on this listener's connections.
+	addr     string
+	port     int
+	security string
+	ln       net.Listener
+	cancel   context.CancelFunc
+	done     chan struct{}
 }
 
 // NewServer creates a VLESS server. handler is invoked with the
@@ -355,16 +362,35 @@ func (s *Server) NodeConfig(nodeID types.NodeID) *VLESSConfig {
 	}
 }
 
-// EnsureNodeListener starts a listener for the node if one is not already
-// running, and returns the node's VLESS endpoint configuration.
-func (s *Server) EnsureNodeListener(ctx context.Context, nodeID types.NodeID) (*VLESSConfig, error) {
+// EnsureNodeListener starts a listener for the node if one is not
+// already running, and returns the node's effective VLESS endpoint
+// configuration. override, when non-nil, is the operator-applied
+// per-node endpoint setting (state.NodeVLESS) and takes precedence
+// over the config-derived endpoint. When the effective endpoint
+// differs from the running listener's, the listener is rebound to
+// the new address/port: closing the old listener stops new accepts
+// only — in-flight connections are served by their own handleConn
+// goroutines and keep their deadline.
+func (s *Server) EnsureNodeListener(ctx context.Context, nodeID types.NodeID, override *VLESSConfig) (*VLESSConfig, error) {
 	config := s.NodeConfig(nodeID)
+	if override != nil {
+		config = override
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.listeners[nodeID]; ok {
-		return config, nil
+	if nl, ok := s.listeners[nodeID]; ok {
+		if nl.addr == config.Address && nl.port == config.Port {
+			return config, nil
+		}
+		// Effective endpoint changed: rebind. The old listener's
+		// accept loop exits on its own (cancel + close); established
+		// connections are left untouched.
+		nl.cancel()
+		_ = nl.ln.Close()
+
+		delete(s.listeners, nodeID)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -374,12 +400,35 @@ func (s *Server) EnsureNodeListener(ctx context.Context, nodeID types.NodeID) (*
 		return nil, fmt.Errorf("listening for node %d on port %d: %w", nodeID, config.Port, err)
 	}
 
+	// The listener's security variant drives the
+	// handshake dispatch in handleConn. Derive it
+	// from the raw variant — the server's own
+	// security for the derived endpoint, the
+	// override's otherwise — because NodeConfig
+	// normalizes an empty server security to
+	// reality_xtls for reporting, while the
+	// transport serves plain VLESS when no crypto
+	// was configured (NewServer).
+	sec := s.cfg.Security
+	if override != nil {
+		sec = override.Security
+	}
+
+	switch sec {
+	case "", "none":
+		sec = "none"
+	case "reality":
+		sec = "reality_xtls"
+	}
+
 	nl := &nodeListener{
-		nodeID: nodeID,
-		port:   config.Port,
-		ln:     ln,
-		cancel: cancel,
-		done:   make(chan struct{}),
+		nodeID:   nodeID,
+		addr:     config.Address,
+		port:     config.Port,
+		security: sec,
+		ln:       ln,
+		cancel:   cancel,
+		done:     make(chan struct{}),
 	}
 	s.listeners[nodeID] = nl
 
@@ -435,17 +484,18 @@ func (s *Server) acceptLoop(ctx context.Context, nl *nodeListener) {
 			}
 		}
 
-		go s.handleConn(ctx, nl.nodeID, conn)
+		go s.handleConn(ctx, nl, conn)
 	}
 }
 
-func (s *Server) handleConn(ctx context.Context, nodeID types.NodeID, conn net.Conn) {
+func (s *Server) handleConn(ctx context.Context, nl *nodeListener, conn net.Conn) {
 	defer conn.Close()
 
-	security := s.cfg.Security
-	if security == "reality" {
-		security = "reality_xtls"
-	}
+	nodeID := nl.nodeID
+	// The listener carries the node's effective security
+	// variant: the per-node endpoint override when one is
+	// applied, the server-wide security otherwise.
+	security := nl.security
 	// Reality path uses xtls/reality which steals the dest handshake;
 	// plain tls/xtls path uses utls.
 	dest := ""
@@ -456,7 +506,9 @@ func (s *Server) handleConn(ctx context.Context, nodeID types.NodeID, conn net.C
 			sni = s.cfg.Reality.ServerNames[0]
 		}
 	}
-	if s.realityConfig != nil && security == "reality_xtls" {
+
+	switch {
+	case s.realityConfig != nil && security == "reality_xtls":
 		rConn, err := reality.Server(ctx, conn, s.realityConfig)
 		if err != nil {
 			realityHandshakeFailure.WithLabelValues(dest, sni, "reality_server").Inc()
@@ -478,20 +530,28 @@ func (s *Server) handleConn(ctx context.Context, nodeID types.NodeID, conn net.C
 		}
 		realityHandshakeSuccess.WithLabelValues(dest, sni).Inc()
 		conn = rConn
-	} else if s.tlsConfig != nil {
-		if security == "reality_xtls" {
-			log.Debug().
-				Uint64("node_id", uint64(nodeID)).
-				Str("utls", s.cfg.UTLSFingerprint).
-				Str("reality_dest", s.cfg.Reality.Dest).
-				Msg("xray: reality_xtls fallback TLS handshake")
-		}
+	case s.tlsConfig != nil && (security == "tls" || security == "xtls"):
 		tlsConn := utls.Server(conn, s.tlsConfig)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			log.Error().Err(err).Uint64("node_id", uint64(nodeID)).Msg("xray: TLS handshake failed")
 			return
 		}
 		conn = tlsConn
+	case security == "none":
+		// Plain VLESS — no handshake.
+	default:
+		// The node's endpoint override requests a security
+		// variant this server has no credentials for (e.g. a
+		// per-node tls override on a reality_xtls server, or
+		// a reality_xtls override on a tls server). Fail
+		// closed: never silently fall back to plain VLESS or
+		// another variant.
+		log.Error().
+			Uint64("node_id", uint64(nodeID)).
+			Str("security", security).
+			Msg("xray: node endpoint security variant unavailable on this server — closing connection")
+
+		return
 	}
 
 	deadline := time.Now().Add(s.cfg.Timeout)

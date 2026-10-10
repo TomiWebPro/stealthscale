@@ -8,19 +8,23 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/http2"
-
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
+	"github.com/tomiwebpro/stealthscale/hscontrol/webui"
 	"github.com/tomiwebpro/stealthscale/hscontrol/xray"
+	"golang.org/x/net/http2"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
@@ -242,4 +246,100 @@ func TestVLESSListenerAutoCreatedForRegisteredNode(t *testing.T) {
 
 	require.False(t, resp.NodeKeyExpired)
 	require.True(t, resp.MachineAuthorized)
+}
+
+// TestVLESSNodeEndpointOverrideRebindsListener pins the
+// per-node VLESS endpoint override mechanism end-to-end
+// (goal #4): a Web UI apply (POST /web/api/vless/{id} →
+// state.SetNodeVLESS) rebinds the node's VLESS listener
+// to the overridden endpoint, the read paths report the
+// override, and an in-flight connection survives the
+// rebind with its deadline intact.
+func TestVLESSNodeEndpointOverrideRebindsListener(t *testing.T) {
+	ts := NewServer(t, WithXRay("127.0.0.1", xrayTestPortStart, xrayTestPortEnd))
+
+	user := ts.CreateUser(t, "vless-override")
+	nv := ts.CreateRegisteredNode(t, user, "vless-override-node")
+	nodeID := nv.ID()
+
+	ts.StartXRay(t)
+
+	derivedPort := xray.NodePort(nodeID, "", xrayTestPortStart, xrayTestPortEnd)
+	derivedAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(derivedPort))
+
+	// The node is served on its derived endpoint first;
+	// keep this connection open across the rebind below.
+	inFlight := dialVLESS(t, derivedAddr, nodeID)
+
+	// Apply a per-node endpoint override through the Web
+	// UI surface — the same delegation a Web UI client
+	// uses. The change listeners fire synchronously, so
+	// the listener is rebound before the apply returns.
+	overridePort := derivedPort + 500
+
+	h := webui.Handler(&types.Config{}, ts.State()) //nolint:exhaustruct_v5 // test fixture: zero config
+
+	ui := httptest.NewServer(h)
+
+	defer ui.Close()
+
+	body := fmt.Sprintf(`{"address":"127.0.0.1","port":%d,"security":"none"}`, overridePort)
+
+	applyReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ui.URL+"/web/api/vless/"+nodeID.String(), strings.NewReader(body))
+	require.NoError(t, err)
+
+	applyReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(applyReq)
+	require.NoError(t, err)
+
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "applying a per-node endpoint override must succeed")
+
+	// The override is stored in state and the read path
+	// reports the overridden endpoint.
+	require.NotNil(t, ts.State().NodeVLESS(nodeID))
+
+	getReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ui.URL+"/web/api/vless/"+nodeID.String(), nil)
+	require.NoError(t, err)
+
+	getResp, err := http.DefaultClient.Do(getReq)
+	require.NoError(t, err)
+
+	defer getResp.Body.Close()
+
+	var got map[string]any
+
+	require.NoError(t, json.NewDecoder(getResp.Body).Decode(&got))
+	assert.Equal(t, "127.0.0.1", got["address"])
+	assert.InDelta(t, overridePort, got["port"], 0)
+	assert.Contains(t, got["uri"], fmt.Sprintf("127.0.0.1:%d", overridePort))
+	assert.Contains(t, got["uri"], "security=none")
+
+	// The listener moved to the overridden endpoint: it
+	// serves the VLESS handshake...
+	overrideAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(overridePort))
+
+	rebound := dialVLESS(t, overrideAddr, nodeID)
+	require.NotNil(t, rebound)
+
+	// ...and the derived endpoint no longer accepts.
+	derivedDialer := &net.Dialer{Timeout: 250 * time.Millisecond} //nolint:exhaustruct_v5 // test fixture: only fields under test
+
+	_, err = derivedDialer.DialContext(t.Context(), "tcp", derivedAddr)
+	require.Error(t, err, "the derived endpoint must stop accepting after the override rebinds the listener")
+
+	// The in-flight connection from before the rebind
+	// keeps its deadline: the server is still waiting
+	// for the noise handshake on that stream, so a read
+	// must time out rather than return EOF as a
+	// torn-down stream would.
+	require.NoError(t, inFlight.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
+
+	_, err = inFlight.Read(make([]byte, 1))
+
+	var netErr net.Error
+
+	require.ErrorAs(t, err, &netErr)
+	assert.True(t, netErr.Timeout(), "in-flight connection must keep its deadline across the rebind")
 }

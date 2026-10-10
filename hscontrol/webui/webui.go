@@ -421,6 +421,16 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func handleNodes(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State) {
 	nodes := st.ListNodes()
+	// Per-node VLESS endpoint overrides (state.NodeVLESS),
+	// when the underlying state implements the read.
+	var vlessOverride func(types.NodeID) *xray.VLESSConfig
+
+	if vr, ok := any(st).(interface {
+		NodeVLESS(nodeID types.NodeID) *xray.VLESSConfig
+	}); ok {
+		vlessOverride = vr.NodeVLESS
+	}
+
 	out := make([]map[string]any, 0, nodes.Len())
 	for _, n := range nodes.All() {
 		ips := []string{}
@@ -438,6 +448,21 @@ func handleNodes(w http.ResponseWriter, r *http.Request, cfg *types.Config, st S
 		if e := n.Expiry(); e.Valid() {
 			expiry = e.Get().Format("2006-01-02T15:04:05Z07:00")
 		}
+
+		vless := map[string]any{
+			"uuid": xray.NodeUUID(n.ID(), cfg.XRay.Secret),
+			"port": xray.NodePort(n.ID(), cfg.XRay.Secret, 10001, 10100),
+		}
+		// An applied endpoint override replaces the
+		// derived port and pins the endpoint address and
+		// security variant the node is served on.
+		if vlessOverride != nil {
+			if ov := vlessOverride(n.ID()); ov != nil {
+				vless["address"] = ov.Address
+				vless["port"] = ov.Port
+				vless["security"] = ov.Security
+			}
+		}
 		out = append(out, map[string]any{
 			"id":        n.ID().String(),
 			"hostname":  n.Hostname(),
@@ -446,10 +471,7 @@ func handleNodes(w http.ResponseWriter, r *http.Request, cfg *types.Config, st S
 			"ips":       ips,
 			"tags":      n.Tags().AsSlice(),
 			"expiry":    expiry,
-			"vless": map[string]any{
-				"uuid": xray.NodeUUID(n.ID(), cfg.XRay.Secret),
-				"port": xray.NodePort(n.ID(), cfg.XRay.Secret, 10001, 10100),
-			},
+			"vless":     vless,
 		})
 	}
 	writeJSON(w, map[string]any{"nodes": out})
@@ -674,11 +696,14 @@ func writeDERPApplied(w http.ResponseWriter, cfg *types.Config, dm *tailcfg.DERP
 }
 
 // handleVLESS serves the per-node VLESS endpoint surface. GET
-// derives and returns the node's endpoint (UUID/port/URI); POST
-// configures the endpoint settings (address, port, security
-// variant), validating them against the same rules the transport
-// enforces and delegating to state.State.SetNodeVLESS when the
-// runtime per-node override mechanism is available.
+// derives and returns the node's endpoint (UUID/port/URI),
+// reflecting the operator-applied per-node endpoint override
+// (state.NodeVLESS) when one is set; POST configures the
+// endpoint settings (address, port, security variant),
+// validating them against the same rules the transport
+// enforces and applying them at runtime via
+// state.State.SetNodeVLESS (which rebinds the node's VLESS
+// listener).
 func handleVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State) {
 	// Expect /web/api/vless/{id} or /admin/api/vless/{id}
 	// Extract id from path suffix
@@ -726,6 +751,20 @@ func handleVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config, st S
 			FP:        cfg.XRay.UTLSFingerprint,
 			PublicKey: cfg.XRay.Reality.PublicKey,
 			ShortID:   cfg.XRay.Reality.ShortID,
+		}
+		// An operator-applied per-node endpoint override
+		// (state.NodeVLESS, set via POST /web/api/vless/{id})
+		// replaces the derived address, port and security
+		// variant. The UUID stays derived: it authenticates
+		// the node, it is not an endpoint setting.
+		if vr, ok := any(st).(interface {
+			NodeVLESS(nodeID types.NodeID) *xray.VLESSConfig
+		}); ok {
+			if ov := vr.NodeVLESS(nodeID); ov != nil {
+				vlessCfg.Address = ov.Address
+				vlessCfg.Port = ov.Port
+				vlessCfg.Security = ov.Security
+			}
 		}
 		writeJSON(w, map[string]any{
 			"nodeID":  nodeID.String(),
@@ -786,12 +825,11 @@ func applyNodeVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config, s
 		http.Error(w, "invalid VLESS endpoint settings: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Delegate to state.State.SetNodeVLESS once the runtime
-	// per-node endpoint override mechanism lands (tracked as the
-	// follow-up work item from the goal-#4 gap). Until then the
-	// surface validates the settings against the transport rules
-	// and reports the stub status, mirroring the other optional
-	// write delegation in this package.
+	// Apply the settings at runtime via
+	// state.State.SetNodeVLESS: the override store is
+	// consulted by the VLESS read paths and the
+	// registered change listeners rebind the node's VLESS
+	// listener to the overridden endpoint.
 	if ws, ok := any(st).(interface {
 		SetNodeVLESS(types.NodeID, *xray.VLESSConfig) error
 	}); ok {

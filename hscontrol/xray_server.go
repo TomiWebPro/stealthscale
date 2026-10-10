@@ -9,11 +9,10 @@ import (
 	"net"
 
 	"github.com/rs/zerolog/log"
-	"tailscale.com/control/controlbase"
-	"tailscale.com/types/key"
-
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
 	"github.com/tomiwebpro/stealthscale/hscontrol/xray"
+	"tailscale.com/control/controlbase"
+	"tailscale.com/types/key"
 )
 
 // StartXRayServer boots the VLESS transport listeners. When enabled, every
@@ -34,6 +33,16 @@ func (h *StealthScale) StartXRayServer(ctx context.Context) error {
 		return fmt.Errorf("creating xray server: %w", err)
 	}
 	h.xrayServer = s
+
+	// Runtime per-node VLESS endpoint overrides (Web UI
+	// POST /web/api/vless/{id} → state.SetNodeVLESS) must
+	// rebind the node's listener: wire the change hook here
+	// so the registration lands wherever the transport is
+	// started (StealthScale.Serve and the servertest
+	// harness alike).
+	h.state.OnNodeVLESSChange(func(nodeID types.NodeID) error {
+		return h.ensureXRayListenerForNode(nodeID)
+	})
 
 	log.Info().
 		Str("listen_addr", h.cfg.XRay.ListenAddr).
@@ -64,23 +73,32 @@ func (h *StealthScale) serveVLESSConn(conn net.Conn) {
 
 	ns := noiseServer{
 		stealthscale: h,
-		challenge: key.NewChallenge(),
+		challenge:    key.NewChallenge(),
 	}
 
 	h.serveNoise(ns, noiseConn, conn.RemoteAddr().String())
 }
 
-// ensureXRayListenerForNode starts the VLESS listener for a node if the
-// xray transport is enabled and no listener is running yet.
-func (h *StealthScale) ensureXRayListenerForNode(nodeID types.NodeID) {
+// ensureXRayListenerForNode starts the VLESS listener for a
+// node if the xray transport is enabled, rebinding it when the
+// node's operator-applied endpoint override (state.NodeVLESS)
+// changed. The override is passed through to the transport so
+// the listener follows the overridden address/port and serves
+// the overridden security variant.
+func (h *StealthScale) ensureXRayListenerForNode(nodeID types.NodeID) error {
 	if h.xrayServer == nil {
-		return
+		return nil
 	}
 
-	if _, err := h.xrayServer.EnsureNodeListener(context.Background(), nodeID); err != nil {
+	override := h.state.NodeVLESS(nodeID)
+
+	if _, err := h.xrayServer.EnsureNodeListener(context.Background(), nodeID, override); err != nil {
 		log.Error().
 			Uint64("node_id", uint64(nodeID)).
 			Err(err).
 			Msg("starting xray listener for node")
+		return err
 	}
+
+	return nil
 }

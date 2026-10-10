@@ -41,6 +41,7 @@ type writeMockState struct {
 	derpMaps        []*tailcfg.DERPMap
 	derpMapRuntime  bool
 	vlessSet        map[types.NodeID]*xray.VLESSConfig
+	vlessOverride   map[types.NodeID]*xray.VLESSConfig
 	electionMode    types.ElectionMode
 	electionPrimary types.NodeID
 }
@@ -160,6 +161,12 @@ func (m *writeMockState) SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig
 	}
 	m.vlessSet[nodeID] = cfg
 	return nil
+}
+
+// NodeVLESS reports the stored per-node endpoint
+// override (shadows state.State).
+func (m *writeMockState) NodeVLESS(nodeID types.NodeID) *xray.VLESSConfig {
+	return m.vlessOverride[nodeID]
 }
 
 func (m *writeMockState) SetElectionMode(mode types.ElectionMode) {
@@ -970,6 +977,27 @@ func TestWebUI_VLESSSettings(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 	resp.Body.Close()
 	assert.Contains(t, got["uri"], "vless://")
+
+	// GET reflects an applied per-node endpoint
+	// override: address, port and security variant
+	// come from the override, the UUID stays derived.
+	st.vlessOverride = map[types.NodeID]*xray.VLESSConfig{
+		types.NodeID(1): { //nolint:exhaustruct_v5 // test fixture: only fields under test
+			Network:  "tcp",
+			Address:  "10.0.0.1",
+			Port:     20050,
+			Security: "none",
+		},
+	}
+	resp = doJSON(t, http.MethodGet, srv.URL+"/web/api/vless/1", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	resp.Body.Close()
+	assert.Equal(t, "10.0.0.1", got["address"])
+	assert.InDelta(t, 20050, got["port"], 0)
+	assert.Contains(t, got["uri"], "10.0.0.1:20050")
+	assert.Contains(t, got["uri"], "security=none")
 
 	// wrong method -> 405
 	resp = doJSON(t, http.MethodDelete, srv.URL+"/web/api/vless/1", nil)
