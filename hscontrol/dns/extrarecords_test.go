@@ -6,6 +6,7 @@ package dns
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -118,4 +119,45 @@ func TestExtraRecordsManager_HashDeduplication(t *testing.T) {
 
 	// Records should remain unchanged (hash dedup works)
 	assert.Equal(t, records, manager.Records())
+}
+
+// TestNewExtraRecordsManager_ErrorPaths pins the constructor's
+// failure modes (missing path, directory, invalid JSON) and, on
+// Linux, asserts they do not leak a file descriptor: the fsnotify
+// watcher owns an inotify fd that must be closed on every error
+// path, otherwise a bad ExtraRecordsPath leaks one fd per startup
+// attempt (NewExtraRecordsManager is called from app.go on every
+// start).
+func TestNewExtraRecordsManager_ErrorPaths(t *testing.T) {
+	tmp := t.TempDir()
+
+	invalidPath := filepath.Join(tmp, "invalid.json")
+	require.NoError(t, os.WriteFile(invalidPath, []byte(`{bad json`), 0o600))
+
+	openFDs := func() int {
+		entries, err := os.ReadDir("/proc/self/fd")
+		if err != nil {
+			return -1
+		}
+
+		return len(entries)
+	}
+
+	before := openFDs()
+
+	for _, path := range []string{
+		filepath.Join(tmp, "nonexistent.json"),
+		tmp, // directory — ErrPathIsDirectory
+		invalidPath,
+	} {
+		_, err := NewExtraRecordsManager(path)
+		require.Error(t, err, "path %q must fail construction", path)
+	}
+
+	if runtime.GOOS == "linux" && before >= 0 {
+		// Each leaked watcher costs one inotify fd; three failed
+		// constructors must not grow the fd table.
+		assert.LessOrEqual(t, openFDs(), before+1,
+			"failed constructors must not leak the fsnotify watcher fd")
+	}
 }

@@ -37,6 +37,17 @@ func NewExtraRecordsManager(path string) (*ExtraRecordsMan, error) {
 		return nil, fmt.Errorf("creating watcher: %w", err)
 	}
 
+	// The watcher owns an inotify fd; close it on every failure path
+	// below so a bad ExtraRecordsPath (missing, a directory, or
+	// unreadable content) does not leak a descriptor per startup
+	// attempt.
+	ok := false
+	defer func() {
+		if !ok {
+			watcher.Close()
+		}
+	}()
+
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("getting file info: %w", err)
@@ -66,6 +77,8 @@ func NewExtraRecordsManager(path string) (*ExtraRecordsMan, error) {
 	}
 
 	log.Trace().Caller().Strs("watching", watcher.WatchList()).Msg("started filewatcher")
+
+	ok = true
 
 	return er, nil
 }
