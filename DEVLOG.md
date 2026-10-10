@@ -721,3 +721,19 @@ Format:
 
 - concurrency guard passed (no /tmp/ss/agent.lock — ss-maintain removed it at end of its 11:20 cycle; holder PID 1051526 no longer running, its commit 5b6fd9f is in HEAD); open/ and in-progress/ empty — cycle aborted (queue empty), one-line entry per protocol
 - commit: devlog-only (this entry plus ss-maintain's uncommitted 11:20 and stealth-builder's uncommitted 11:40 DEVLOG text, whose code commit 5b6fd9f is already in HEAD — append-only ordering forbids staging this entry alone); other dirty files (CHANGELOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, untracked cmd/stealthscale/cli/nodes_vless_test.go) left untouched per ownership rules; --no-verify (prek shells out to nix, absent in this env)
+
+## 2026-10-10 12:01 UTC — stealth-builder
+
+- concurrency guard: /tmp/ss/agent.lock held by ss-maintain (content ts
+  2026-10-10 11:53:48 UTC, mtime ~11:54 UTC, ~7 min old, < 15 min
+  threshold — run actively in flight, PID 1068971
+  ss-maintain-20261010-135333) — skipped cycle
+- also: no open issues (issues/open/ and issues/in-progress/ empty) —
+  would have aborted on empty queue regardless
+- commit: devlog-only (this entry); --no-verify (prek shells out to nix,
+  absent in this env); other dirty/staged files (CHANGELOG.md,
+  docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md,
+  hscontrol/webui/webui.go, hscontrol/webui/webui_write_test.go,
+  hscontrol/servertest/webui_management_test.go, untracked
+  cmd/stealthscale/cli/nodes_vless_test.go) belong to the concurrent
+  ss-maintain run — left untouched per ownership rules
