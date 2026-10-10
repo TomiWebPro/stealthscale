@@ -240,4 +240,11 @@ func TestUpAddressOverrideAppliesToFetchedEndpoint(t *testing.T) {
 	assert.Contains(t, err.Error(), "VLESS dial failed")
 	assert.Contains(t, err.Error(), "127.0.0.1:10042")
 	assert.NotContains(t, err.Error(), "10.0.0.5")
+
+	// The dial-failure hints must point at real CLI surface:
+	// 'stscale nodes vless' prints the PBK/SID/Dest/FP columns
+	// by default. There is no --verbose flag — a hint that
+	// references a non-existent flag is a dead end for the user.
+	assert.Contains(t, err.Error(), "stscale nodes vless")
+	assert.NotContains(t, err.Error(), "--verbose")
 }

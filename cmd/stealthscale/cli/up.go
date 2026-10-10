@@ -179,7 +179,7 @@ Examples:
 		pterm.Info.Printf("dialling VLESS %s@%s:%d (security=%s, dest=%s, fp=%s)...\n", cfg.ID[:8]+"...", cfg.Address, cfg.Port, cfg.Security, cfg.Dest, cfg.FP)
 		conn, err := xray.DialVLESS(ctx, cfg)
 		if err != nil {
-			return fmt.Errorf("VLESS dial failed (stealth transport not satisfied): %w\n\nHints:\n- endpoint must be reachable (firewall: xray.listen_port..max_listen_port)\n- UUID/port derived from xray.secret — ensure coordinator's secret is stable\n- pbk/sid mismatch: verify 'stscale nodes vless <id>' URI matches client (check pbk, sid, dest, fp columns with --verbose)\n- if the URI contains 0.0.0.0 (coordinator's xray.listen_addr), pass --address <public-IP-or-FQDN> or set xray.listen_addr on the coordinator\n- check 'curl http://<coordinator>/web/api/derp | jq .stealth_satisfied' and 'stscale health'", err)
+			return fmt.Errorf("VLESS dial failed (stealth transport not satisfied): %w\n\nHints:\n- endpoint must be reachable (firewall: xray.listen_port..max_listen_port)\n- UUID/port derived from xray.secret — ensure coordinator's secret is stable\n- pbk/sid mismatch: verify 'stscale nodes vless <id>' output (PBK/SID/Dest/FP columns) matches the client's URI\n- if the URI contains 0.0.0.0 (coordinator's xray.listen_addr), pass --address <public-IP-or-FQDN> or set xray.listen_addr on the coordinator\n- check 'curl http://<coordinator>/web/api/derp | jq .stealth_satisfied' and 'stscale health'", err)
 		}
 		defer conn.Close()
 		pterm.Success.Printf("VLESS handshake succeeded to %s:%d (security=%s, utls=%s)\n", cfg.Address, cfg.Port, cfg.Security, cfg.FP)
