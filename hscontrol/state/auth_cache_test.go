@@ -62,3 +62,56 @@ func TestAuthCacheBoundedLRU(t *testing.T) {
 		assert.True(t, ok, "non-evicted entry %d should still be in the cache", i)
 	}
 }
+
+// TestAuthCacheTimeExpiryWakesParkedRegistration pins the
+// time-based expiry path of the registration auth cache — the
+// mechanism production actually relies on (the
+// registerCacheExpiration TTL, default 15m, tunable via
+// Tuning.RegisterCacheExpiration). A registration session that
+// lapses past its TTL must wake any goroutine parked on
+// WaitForAuth with ErrRegistrationExpired via the cache's
+// eviction callback, and the expired session must be gone from
+// the cache. This is the boundary the interactive `stscale up`
+// registration poll depends on: a regression that drops the TTL
+// wiring (a zero TTL disables the expiry janitor entirely, so a
+// parked registration would hang until the 1024-entry size
+// bound evicts it) or the eviction callback would leave every
+// size-eviction test green while real registration sessions
+// hang instead of expiring.
+func TestAuthCacheTimeExpiryWakesParkedRegistration(t *testing.T) {
+	dbPath := t.TempDir() + "/auth-cache-expiry.db"
+	cfg := persistTestConfig(dbPath)
+	// Short TTL so the expiry janitor (ttl/100 tick) retires the
+	// entry within the test budget; the production default is 15m.
+	cfg.Tuning.RegisterCacheExpiration = 400 * time.Millisecond
+
+	s, err := NewState(cfg)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = s.Close() })
+
+	authID := types.MustAuthID()
+	req := types.NewAuthRequest()
+	s.SetAuthCacheEntry(authID, req)
+
+	// Before the TTL lapses the session is live.
+	got, ok := s.GetAuthCacheEntry(authID)
+	require.True(t, ok, "a freshly parked registration session must be retrievable")
+	require.Same(t, req, got)
+
+	// The TTL lapse must wake the parked waiter with
+	// ErrRegistrationExpired — never hang until the size bound
+	// evicts the entry.
+	select {
+	case verdict := <-req.WaitForAuth():
+		require.False(t, verdict.Accept(), "an expired registration session must not be accepted")
+		require.ErrorIs(t, verdict.Err, ErrRegistrationExpired,
+			"an expired registration session must surface ErrRegistrationExpired, got: %v", verdict.Err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("registration session was not woken by TTL expiry")
+	}
+
+	// After the expiry the session is gone from the cache.
+	_, ok = s.GetAuthCacheEntry(authID)
+	assert.False(t, ok, "an expired registration session must not remain retrievable")
+}

@@ -116,10 +116,10 @@ URI      | vless://9f4d4f6c-d1e2-4a3b-9c8d-7a6b5c4d3e2f@10.0.0.5:10042?security=
 Give the client the `URI` (or the `id`/`address`/`port`/`security` fields
 individually). For `reality_xtls` the URI carries Reality hints so the client
 can dial with uTLS+Reality: `dest` (decoy, e.g. `www.cloudflare.com:443`),
-`pbk` (server's Reality public key hex, 32 bytes, `hscontrol/types/config.go:290`
-`InitIdentity`), `sid` (shortId hex), `spx` (SpiderX, `hscontrol/xray/client.go:340`
+`pbk` (server's Reality public key hex, 32 bytes, `hscontrol/types/config.go:281`
+`InitIdentity`), `sid` (shortId hex), `spx` (SpiderX, `hscontrol/xray/client.go:231`
 `ParseVLESSURI` → `hscontrol/xray/vless.go:50` `VLESSConfig`), `fp` (uTLS fingerprint
-`chrome`/`firefox`/`safari`/`ios`/`randomized` → `hscontrol/xray/client.go:247`
+`chrome`/`firefox`/`safari`/`ios`/`randomized` → `hscontrol/xray/client.go:205`
 `fpToClientHelloID`).
 
 !!! note "Listeners start on registration"
