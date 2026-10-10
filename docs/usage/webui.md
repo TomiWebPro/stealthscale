@@ -10,7 +10,7 @@ Visit `http://<server>:8080/web` or `http://<server>:8080/admin` (alias) — wor
 - **Users** — names, emails, providers; create users
 - **PreAuthKeys** — keys, reuse/ephemeral flags, expiry; create, expire and delete keys
 - **API Keys** — list (masked prefixes only), create (raw key shown once), expire and delete
-- **Auth** — inspect, approve and reject pending authentication requests by auth ID
+- **Auth** — inspect pending authentication requests by auth ID; approve and reject SSH-check sessions (registration sessions are completed via the node's auth URL, not by approve/reject)
 - **Policy** — current ACL/HuJSON policy; validate a draft policy against the live users and nodes without applying it
 - **DERP** — DERP map with `stealth_satisfied` and `shouldIncludeDERP` flags (fail-closed when stealth unsatisfied)
 - **VLESS** — per-node `vless://` URI, UUID, port, Reality dest
@@ -56,8 +56,8 @@ POST   /web/api/apikeys      # create API key {expiry} → raw key returned exac
 POST   /web/api/apikeys/{id}/expire  # expire API key → `state.ExpireAPIKey`
 DELETE /web/api/apikeys/{id}         # destroy API key → `state.DestroyAPIKey`
 GET    /web/api/auth/{id}    # pending auth session status → `state.GetAuthCacheEntry`
-POST   /web/api/auth/{id}/approve   # approve pending auth session (`FinishAuth` with an accepting verdict)
-POST   /web/api/auth/{id}/reject    # reject pending auth session (`FinishAuth` with a rejecting verdict)
+POST   /web/api/auth/{id}/approve   # approve pending SSH-check session (`FinishAuth` with an accepting verdict); registration sessions → 409
+POST   /web/api/auth/{id}/reject    # reject pending SSH-check session (`FinishAuth` with a rejecting verdict); registration sessions → 409
 GET    /web/api/policy       # current policy
 PUT    /web/api/policy       # set policy {policy: "HuJSON string"} (also POST)
 POST   /web/api/policy/check # validate a draft policy against live users and nodes without persisting it
@@ -79,4 +79,4 @@ The UI is registered via `hscontrol/webui.Register(mux, cfg, state)` in `hscontr
 Terminate TLS at your reverse proxy and forward `/web` and `/` to the StealthScale server. See [Reverse proxy](../ref/integration/reverse-proxy.md) and [TLS](../ref/tls.md).
 
 
-> **Management parity:** node expire/rename/tag/approve-routes, pre-auth key expire/delete, API-key CRUD, auth approve/reject and policy `check` are all reachable from the Web UI (see the API list above; implemented in `hscontrol/webui/webui.go`, tabs in `frontend/index.html`). WebUI stores the API key in `localStorage` and sends `Authorization: Bearer` (see `frontend/app.js:ensureAPIKey`). Hardened default requires `enforce && enforce_control` and validates via `ValidateAPIKey` (not presence only).
+> **Management parity:** node expire/rename/tag/approve-routes, pre-auth key expire/delete, API-key CRUD, auth approve/reject (SSH-check sessions — registration sessions complete via the node's auth URL) and policy `check` are all reachable from the Web UI (see the API list above; implemented in `hscontrol/webui/webui.go`, tabs in `frontend/index.html`). WebUI stores the API key in `localStorage` and sends `Authorization: Bearer` (see `frontend/app.js:ensureAPIKey`). Hardened default requires `enforce && enforce_control` and validates via `ValidateAPIKey` (not presence only).

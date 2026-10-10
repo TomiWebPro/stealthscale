@@ -210,6 +210,27 @@ func TestWebUI_ManagementDelegatesToRealState(t *testing.T) {
 		t.Fatal("expected an accepting verdict after WebUI approve")
 	}
 
+	// Registration sessions are refused: the interactive auth
+	// flow (the node's auth URL) completes them — a verdict
+	// here would carry no node and the registering client
+	// would silently restart its registration.
+	regReq := types.NewRegisterAuthRequest(&types.RegistrationData{Hostname: "reg-session"}) //nolint:exhaustruct_v5 // test fixture: only fields under test
+	regID := types.MustAuthID()
+
+	st.SetAuthCacheEntry(regID, regReq)
+
+	code, out = doReq(http.MethodPost, "/web/api/auth/"+regID.String()+"/approve", map[string]string{})
+	require.Equal(t, http.StatusConflict, code, out)
+
+	code, out = doReq(http.MethodPost, "/web/api/auth/"+regID.String()+"/reject", map[string]string{})
+	require.Equal(t, http.StatusConflict, code, out)
+
+	select {
+	case v := <-regReq.WaitForAuth():
+		t.Fatalf("registration session must not be decided from the WebUI, got verdict %+v", v)
+	default:
+	}
+
 	// Policy check validates against live users/nodes without persisting.
 	code, out = doReq(http.MethodPost, "/web/api/policy/check", map[string]string{"policy": pol})
 	require.Equal(t, http.StatusOK, code, out)

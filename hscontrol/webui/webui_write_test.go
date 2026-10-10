@@ -445,6 +445,29 @@ func TestWebUI_AuthApproveReject(t *testing.T) {
 		t.Fatal("expected an auth verdict after reject")
 	}
 
+	// registration sessions cannot be decided from the WebUI: the
+	// interactive auth flow (the node's auth URL) completes them,
+	// and a verdict without a node would make the registering
+	// client silently restart its registration
+	regReq := types.NewRegisterAuthRequest(&types.RegistrationData{Hostname: "reg-host"}) //nolint:exhaustruct_v5 // test fixture: only fields under test
+	st.authCache[types.AuthID(testAuthID)] = regReq
+
+	resp2 = doJSON(t, http.MethodPost, srv.URL+"/web/api/auth/"+testAuthID+"/approve", map[string]string{})
+	require.Equal(t, http.StatusConflict, resp2.StatusCode)
+	resp2.Body.Close()
+
+	resp2 = doJSON(t, http.MethodPost, srv.URL+"/web/api/auth/"+testAuthID+"/reject", map[string]string{})
+	require.Equal(t, http.StatusConflict, resp2.StatusCode)
+	resp2.Body.Close()
+
+	// no verdict was delivered — the session stays pending for the
+	// interactive flow to complete
+	select {
+	case v := <-regReq.WaitForAuth():
+		t.Fatalf("registration session must not be decided from the WebUI, got verdict %+v", v)
+	default:
+	}
+
 	// unknown session -> 404
 	resp2 = doJSON(t, http.MethodPost, srv.URL+"/web/api/auth/hskey-authreq-ffffffffffffffffffffffff/approve", map[string]string{})
 	require.Equal(t, http.StatusNotFound, resp2.StatusCode)

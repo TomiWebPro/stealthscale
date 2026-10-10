@@ -1270,6 +1270,19 @@ func handleAuthFinish(w http.ResponseWriter, st State, authID types.AuthID, appr
 			return
 		}
 
+		// Registration sessions are decided by the interactive auth
+		// flow: opening the node's auth URL resolves the user identity
+		// and creates the node (State.HandleNodeFromAuthPath), which
+		// delivers the verdict carrying the new node. A verdict sent
+		// here carries no node, and the registering client treats an
+		// accept without a node as an expired session and silently
+		// restarts its registration (hscontrol waitForFollowup) — so
+		// refuse instead of breaking the flow.
+		if authReq.IsRegistration() {
+			http.Error(w, "registration sessions are completed via the node's auth URL; approve/reject applies to SSH-check sessions", http.StatusConflict)
+			return
+		}
+
 		if approve {
 			authReq.FinishAuth(types.AuthVerdict{Err: nil, Node: types.NodeView{}})
 		} else {
