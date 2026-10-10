@@ -409,3 +409,97 @@ func TestVLESSNodeEndpointOverrideRebindsListener(t *testing.T) {
 	require.ErrorAs(t, err, &netErr)
 	assert.True(t, netErr.Timeout(), "in-flight connection must keep its deadline across the override and the clear rebind")
 }
+
+// TestVLESSNodeOverrideConflictingPortFailsClosed pins the
+// failure mode of a per-node VLESS endpoint override whose
+// port collides with a live listener (here: another node's
+// config-derived port). The apply must fail loudly — a 400
+// whose error names the node and the conflicting port —
+// instead of silently succeeding, and the conflicting port
+// must stay owned by the node it belongs to: a connection
+// presenting the overridden node's UUID to it is refused
+// without the version ack, so a bad override can never
+// make a node's handshake succeed on another node's
+// listener.
+func TestVLESSNodeOverrideConflictingPortFailsClosed(t *testing.T) {
+	ts := NewServer(t, WithXRay("127.0.0.1", xrayTestPortStart, xrayTestPortEnd))
+
+	user := ts.CreateUser(t, "vless-conflict")
+	owner := ts.CreateRegisteredNode(t, user, "vless-conflict-owner")
+	conflicting := ts.CreateRegisteredNode(t, user, "vless-conflict-node")
+	ownerID := owner.ID()
+	nodeID := conflicting.ID()
+
+	ts.StartXRay(t)
+
+	// The owner node's derived endpoint is live; it is the
+	// port the conflicting override collides with.
+	ownerPort := xray.NodePort(ownerID, "", xrayTestPortStart, xrayTestPortEnd)
+	ownerAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(ownerPort))
+
+	ownerConn := dialVLESS(t, ownerAddr, ownerID)
+	require.NotNil(t, ownerConn, "the owner node's derived listener must be live before the conflicting apply")
+
+	h := webui.Handler(&types.Config{ //nolint:exhaustruct_v5 // test fixture: only the XRay section is under test
+		XRay: types.XRayConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+			Enabled:        true,
+			ListenAddr:     "127.0.0.1",
+			BaseListenPort: xrayTestPortStart,
+			MaxListenPort:  xrayTestPortEnd,
+			Timeout:        30 * time.Second,
+		},
+	}, ts.State())
+
+	ui := httptest.NewServer(h)
+
+	defer ui.Close()
+
+	// Apply an override that points the second node at the
+	// first node's live port.
+	body := fmt.Sprintf(`{"address":"127.0.0.1","port":%d,"security":"none"}`, ownerPort)
+
+	applyReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ui.URL+"/web/api/vless/"+nodeID.String(), strings.NewReader(body))
+	require.NoError(t, err)
+
+	applyReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(applyReq)
+	require.NoError(t, err)
+
+	defer resp.Body.Close()
+
+	// The rebind onto an occupied port must fail the apply:
+	// the operator is told which node and port collided.
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, "an override colliding with a live listener must fail the apply")
+
+	errBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(errBody), "listening for node", "the 400 must carry the listener bind error")
+	assert.Contains(t, string(errBody), strconv.Itoa(ownerPort), "the 400 must name the conflicting port")
+
+	// The conflicting port stays owned by its node: a
+	// connection presenting the second node's UUID to it is
+	// refused without the version ack.
+	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(t.Context(), "tcp", ownerAddr) //nolint:exhaustruct_v5 // test fixture: only the timeout is under test
+	require.NoError(t, err)
+
+	t.Cleanup(func() { conn.Close() })
+
+	uuidBytes, err := uuid.Parse(xray.NodeUUID(nodeID, ""))
+	require.NoError(t, err)
+
+	header := make([]byte, 0, 18)
+	header = append(header, 0)
+	header = append(header, uuidBytes[:]...)
+	header = append(header, 0)
+
+	require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
+
+	_, err = conn.Write(header)
+	require.NoError(t, err)
+
+	var ack [1]byte
+
+	_, err = io.ReadFull(conn, ack[:])
+	require.Error(t, err, "the conflicting node must not be acked on another node's listener")
+}
