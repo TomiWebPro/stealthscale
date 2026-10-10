@@ -44,7 +44,7 @@ DELETE /web/api/nodes/{id}   # delete node (delegates to `state.DeleteNode(NodeV
 POST   /web/api/nodes/{id}/expire   # set node expiry {expiry: "<RFC3339>"|"never"} → `state.SetNodeExpiry`
 POST   /web/api/nodes/{id}/rename   # rename node {name} → `state.RenameNode`
 POST   /web/api/nodes/{id}/tags     # set node tags {tags: ["tag:..."]} → `state.SetNodeTags`
-POST   /web/api/nodes/{id}/routes   # approve advertised routes {routes: ["10.0.0.0/24"]} → `state.SetApprovedRoutes`
+POST   /web/api/nodes/{id}/routes   # set advertised routes {routes: ["10.0.0.0/24"]} → `state.SetApprovedRoutes`; an empty list clears all approved routes (same as `stscale nodes approve-routes -r ""` and the v1 API)
 GET    /web/api/users        # list users
 POST   /web/api/users        # create user {name, email} (delegates to `state.CreateUser` with Change)
 GET    /web/api/preauthkeys  # list pre-auth keys

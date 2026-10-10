@@ -118,6 +118,24 @@ func TestWebUI_ManagementDelegatesToRealState(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, out)
 	assert.NotContains(t, out["status"], "stub")
 
+	nv, ok = st.GetNodeByID(node.ID())
+	require.True(t, ok)
+	require.Len(t, nv.ApprovedRoutes().AsSlice(), 1)
+
+	// Empty route list clears the approved set — the Web UI
+	// endpoint must express the same clear-all operation the
+	// CLI (`stscale nodes approve-routes -r ""`) and the v1
+	// API support, so an operator who unchecks every route in
+	// the UI is not stuck with a 400 and a permanently
+	// approved route.
+	code, out = doReq(http.MethodPost, nodePath+"/routes", map[string]any{"routes": []string{}})
+	require.Equal(t, http.StatusOK, code, out)
+	assert.NotContains(t, out["status"], "stub")
+
+	nv, ok = st.GetNodeByID(node.ID())
+	require.True(t, ok)
+	assert.Empty(t, nv.ApprovedRoutes().AsSlice(), "approved routes must be cleared by an empty list")
+
 	// Pre-auth key expire, then delete. Keys are tagged or
 	// user-owned (tags-XOR-user identity rule).
 	userID := types.UserID(user.ID)

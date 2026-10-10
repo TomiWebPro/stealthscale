@@ -223,6 +223,16 @@ func TestWebUI_NodeLifecycle(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	resp.Body.Close()
 
+	// empty routes -> 200, clears the approved set: the Web UI
+	// endpoint must express the same clear-all operation the CLI
+	// and the v1 API support (approve_routes with an empty list),
+	// so an operator who unchecks every route is not stuck with a
+	// 400 and a permanently approved route.
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/nodes/1/routes", map[string]any{"routes": []string{}})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+	assert.Empty(t, st.routesSet[types.NodeID(1)])
+
 	// unknown node -> 404
 	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/nodes/999/rename", map[string]string{"name": "x"})
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)

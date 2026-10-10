@@ -989,11 +989,6 @@ func handleNodeRoutes(w http.ResponseWriter, r *http.Request, st State) {
 		return
 	}
 
-	if len(req.Routes) == 0 {
-		http.Error(w, "missing routes", http.StatusBadRequest)
-		return
-	}
-
 	routes := make([]netip.Prefix, 0, len(req.Routes))
 	for _, rt := range req.Routes {
 		p, err := netip.ParsePrefix(strings.TrimSpace(rt))
