@@ -254,7 +254,10 @@ func TestVLESSListenerAutoCreatedForRegisteredNode(t *testing.T) {
 // state.SetNodeVLESS) rebinds the node's VLESS listener
 // to the overridden endpoint, the read paths report the
 // override, and an in-flight connection survives the
-// rebind with its deadline intact.
+// rebind with its deadline intact. A Web UI clear
+// (POST {"clear": true} → SetNodeVLESS with nil) is
+// the path back: the listener rebinds to the derived
+// endpoint and the read paths report it again.
 func TestVLESSNodeEndpointOverrideRebindsListener(t *testing.T) {
 	ts := NewServer(t, WithXRay("127.0.0.1", xrayTestPortStart, xrayTestPortEnd))
 
@@ -351,11 +354,22 @@ func TestVLESSNodeEndpointOverrideRebindsListener(t *testing.T) {
 	require.ErrorAs(t, err, &netErr)
 	assert.True(t, netErr.Timeout(), "in-flight connection must keep its deadline across the rebind")
 
-	// Clear the override through the same state method the
-	// Web UI POST delegates to (state.SetNodeVLESS with
-	// nil): the listener must rebind back to the
-	// config-derived endpoint.
-	require.NoError(t, ts.State().SetNodeVLESS(nodeID, nil))
+	// Clear the override through the Web UI surface
+	// itself (POST {"clear": true} → state.SetNodeVLESS
+	// with nil): the listener must rebind back to the
+	// config-derived endpoint. This is the operator
+	// path back to the derived endpoint — without it
+	// an applied override is stuck until a restart.
+	clearReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ui.URL+"/web/api/vless/"+nodeID.String(), strings.NewReader(`{"clear":true}`))
+	require.NoError(t, err)
+
+	clearReq.Header.Set("Content-Type", "application/json")
+
+	clearResp, err := http.DefaultClient.Do(clearReq)
+	require.NoError(t, err)
+
+	clearResp.Body.Close()
+	require.Equal(t, http.StatusOK, clearResp.StatusCode, "clearing a per-node endpoint override must succeed")
 
 	// The override is gone from the store and the read
 	// path reports the derived endpoint again.

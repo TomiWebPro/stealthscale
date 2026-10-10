@@ -227,6 +227,25 @@ async function applyVLESS() {
     result.textContent = "Apply failed: " + e.message;
   }
 }
+// clearVLESS clears a per-node VLESS endpoint override
+// (POST {"clear": true}): the override is removed from
+// the state store and the node's VLESS listener is
+// rebound to the config-derived endpoint.
+async function clearVLESS() {
+  const id = document.getElementById("vlessId").value.trim();
+  const result = document.getElementById("vlessResult");
+  if (!id) {
+    result.textContent = "Enter a node ID first.";
+    return;
+  }
+  try {
+    const d = await fetchJSONMethod("/vless/" + encodeURIComponent(id), "POST", { clear: true });
+    result.textContent = JSON.stringify(d, null, 2);
+    loadVLESS();
+  } catch (e) {
+    result.textContent = "Clear failed: " + e.message;
+  }
+}
 async function loadElection() {
   try {
     const d = await fetchJSON("/election");

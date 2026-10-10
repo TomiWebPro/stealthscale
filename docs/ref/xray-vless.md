@@ -65,7 +65,7 @@ port = base + sha256("stealthscale-port:<id>") % (max-min+1)
 
 - `hscontrol/xray/vless.go:156` `NodeUUID()`, `hscontrol/xray/vless.go:172` `NodePort()` — HMAC-keyed when `xray.secret` is set via `types.XRayConfig.InitIdentity`.
 - Never changes across restarts when `xray.secret` is stable (persisted to `.xray_secret` for sqlite, must be set explicitly for postgres) → static client config.
-- A per-node endpoint override (`state.SetNodeVLESS`, applied from the Web UI via `POST /web/api/vless/{id}`) replaces the derived address, port and security variant for that node: the node's listener is rebound to the overridden endpoint (in-flight connections keep their deadline), and the Web UI read paths (`GET /web/api/vless/{id}`, the node listing) report the overridden endpoint. A security variant the server has no credentials for (e.g. a `tls` override on a `reality_xtls` server) fails closed on the transport rather than silently downgrading.
+- A per-node endpoint override (`state.SetNodeVLESS`, applied from the Web UI via `POST /web/api/vless/{id}`) replaces the derived address, port and security variant for that node: the node's listener is rebound to the overridden endpoint (in-flight connections keep their deadline), and the Web UI read paths (`GET /web/api/vless/{id}`, the node listing) report the overridden endpoint. A security variant the server has no credentials for (e.g. a `tls` override on a `reality_xtls` server) fails closed on the transport rather than silently downgrading. `POST /web/api/vless/{id}` with `{"clear": true}` removes the override (`state.SetNodeVLESS` with `nil`) and rebinds the listener back to the config-derived endpoint — the path back after a bad apply, without a restart. Clearing is mutually exclusive with endpoint fields (a request carrying both is a 400).
 - Fetch: `stscale nodes vless <node-id>` or `GET /web/api/vless/{id}`. The `URI()` includes Reality hints so a patched client can dial with uTLS+Reality.
 
 Example URI (reality_xtls, dual decoys):
@@ -135,7 +135,7 @@ make test
 
 ## WebUI
 
-VLESS tab shows per-node URI/port/UUID and applies endpoint settings at runtime (`POST /web/api/vless/{id}`: address, port, security variant — validated against `VLESSConfig.Validate`, stored via `state.SetNodeVLESS`, enforced by rebinding the node's VLESS listener); DERP tab shows the stealth badge and applies a full DERP map at runtime (`POST /web/api/derp` → `state.SetDERPMap`). See [Web UI](../usage/webui.md).
+VLESS tab shows per-node URI/port/UUID and applies endpoint settings at runtime (`POST /web/api/vless/{id}`: address, port, security variant — validated against `VLESSConfig.Validate`, stored via `state.SetNodeVLESS`, enforced by rebinding the node's VLESS listener), and clears an applied override (`{"clear": true}` → `state.SetNodeVLESS` with `nil`, rebinding the listener to the config-derived endpoint); DERP tab shows the stealth badge and applies a full DERP map at runtime (`POST /web/api/derp` → `state.SetDERPMap`). See [Web UI](../usage/webui.md).
 
 ## References
 

@@ -986,6 +986,32 @@ func TestWebUI_VLESSSettings(t *testing.T) {
 	resp.Body.Close()
 	assert.Equal(t, "reality_xtls", st.vlessSet[types.NodeID(1)].Security)
 
+	// {"clear": true} removes the override through the
+	// same delegation: SetNodeVLESS is called with nil,
+	// rebinding the node's listener to the derived endpoint.
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/1", map[string]any{"clear": true})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	resp.Body.Close()
+	assert.Equal(t, "vless endpoint override cleared", out["status"])
+	assert.Nil(t, st.vlessSet[types.NodeID(1)], "a clear must delegate SetNodeVLESS with a nil override")
+
+	// clear together with endpoint settings is
+	// ambiguous input -> 400 (same guard shape as
+	// approve-routes --all + --routes)
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/1", map[string]any{"clear": true, "address": "10.0.0.1", "port": 10001})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/1", map[string]any{"clear": true, "security": "tls"})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// clear on an unknown node -> 404
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/999", map[string]any{"clear": true})
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	resp.Body.Close()
+
 	// invalid security variant -> 400
 	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/1", map[string]any{"address": "10.0.0.1", "port": 10001, "security": "carrier-pigeon"})
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -1069,6 +1095,16 @@ func TestWebUI_VLESSSettings(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var stubOut map[string]any
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&stubOut))
+	resp.Body.Close()
+	assert.Contains(t, stubOut["status"], "stub")
+
+	// stub path for the clear: a State without
+	// SetNodeVLESS keeps the stub contract for
+	// {"clear": true} too
+	resp = doJSON(t, http.MethodPost, srvStub.URL+"/web/api/vless/1", map[string]any{"clear": true})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&stubOut))
 	resp.Body.Close()

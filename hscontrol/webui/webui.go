@@ -735,7 +735,9 @@ func writeDERPApplied(w http.ResponseWriter, cfg *types.Config, dm *tailcfg.DERP
 // validating them against the same rules the transport
 // enforces and applying them at runtime via
 // state.State.SetNodeVLESS (which rebinds the node's VLESS
-// listener).
+// listener). POST with {"clear": true} removes the override
+// and rebinds the listener back to the config-derived
+// endpoint.
 func handleVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State) {
 	// Expect /web/api/vless/{id} or /admin/api/vless/{id}
 	// Extract id from path suffix
@@ -819,12 +821,16 @@ func handleVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config, st S
 // (xray.VLESSConfig.Validate): a non-empty address, a port within
 // 1-65535, and a security variant of none/tls/xtls/reality_xtls
 // ("reality" is accepted as the reality_xtls alias, as everywhere
-// else in the codebase).
+// else in the codebase). A request with {"clear": true} carries no
+// endpoint settings and removes the override instead — the node's
+// listener is rebound to the config-derived endpoint
+// (state.SetNodeVLESS with nil).
 func applyNodeVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State, nodeID types.NodeID) {
 	var req struct {
 		Address  string `json:"address"`
 		Port     int    `json:"port"`
 		Security string `json:"security"`
+		Clear    bool   `json:"clear"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -832,6 +838,44 @@ func applyNodeVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config, s
 	}
 	if st.ListNodes(nodeID).Len() == 0 {
 		http.Error(w, "node not found", http.StatusNotFound)
+		return
+	}
+	// Clear the per-node override: SetNodeVLESS(nodeID, nil)
+	// deletes it and the registered change listeners rebind
+	// the node's VLESS listener to the config-derived
+	// endpoint. Clearing together with endpoint settings is
+	// ambiguous input and is refused (the approve-routes
+	// --all/--routes guard is the same shape).
+	if req.Clear {
+		if req.Address != "" || req.Port != 0 || strings.TrimSpace(req.Security) != "" {
+			http.Error(w, "clear and endpoint settings are mutually exclusive", http.StatusBadRequest)
+
+			return
+		}
+
+		if ws, ok := any(st).(interface {
+			SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig) error
+		}); ok {
+			err := ws.SetNodeVLESS(nodeID, nil)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+
+				return
+			}
+
+			writeJSON(w, map[string]any{
+				"status": "vless endpoint override cleared",
+				"nodeID": nodeID.String(),
+			})
+
+			return
+		}
+
+		writeJSON(w, map[string]any{
+			"status": "vless endpoint override clear (stub — wire to state.State.SetNodeVLESS)",
+			"nodeID": nodeID.String(),
+		})
+
 		return
 	}
 	sec := strings.TrimSpace(req.Security)
