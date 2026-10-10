@@ -257,3 +257,129 @@ func TestWebUI_ManagementDelegatesToRealState(t *testing.T) {
 	code, _ = doReq(http.MethodPost, "/web/api/policy/check", map[string]string{"policy": "{broken"})
 	assert.Equal(t, http.StatusBadRequest, code)
 }
+
+// TestWebUI_ElectionDelegatesToRealState pins the election
+// surface against a real *state.State: the mode switch and
+// primary delegation interfaces must be satisfied (no stub
+// fallback) and the switch must land in the live election
+// snapshot — including the auto-clears-primary invariant and
+// the "mode switch is the final word" ordering.
+func TestWebUI_ElectionDelegatesToRealState(t *testing.T) {
+	srv := NewServer(t)
+	defer srv.Close()
+
+	st := srv.State()
+
+	user := srv.CreateUser(t, "webui-election")
+
+	node := srv.CreateRegisteredNode(t, user, "webui-election-node")
+
+	h := webui.Handler(&types.Config{}, st) //nolint:exhaustruct_v5 // test fixture: zero config
+
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	doReq := func(method, path string, body any) (int, map[string]any) {
+		var rdr *bytes.Reader
+
+		if body != nil {
+			b, err := json.Marshal(body)
+			require.NoError(t, err)
+
+			rdr = bytes.NewReader(b)
+		} else {
+			rdr = bytes.NewReader(nil)
+		}
+
+		req, err := http.NewRequestWithContext(context.Background(), method, ts.URL+path, rdr)
+		require.NoError(t, err)
+
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+
+		defer resp.Body.Close()
+
+		out := map[string]any{}
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+
+		return resp.StatusCode, out
+	}
+
+	snapshot := func() map[string]any {
+		return st.ElectionSnapshot()
+	}
+
+	// Fresh state: automatic mode, no fixed primary.
+	code, out := doReq(http.MethodGet, "/web/api/election", nil)
+	require.Equal(t, http.StatusOK, code, out)
+	assert.Equal(t, string(types.ElectionModeAuto), out["mode"])
+	assert.Equal(t, false, out["has_primary"])
+
+	// Switch to manual and set the primary in one step.
+	code, out = doReq(http.MethodPost, "/web/api/election", map[string]any{
+		"mode":    string(types.ElectionModeManual),
+		"node_id": uint64(node.ID()),
+	})
+	require.Equal(t, http.StatusOK, code, out)
+	assert.NotContains(t, out["status"], "stub")
+	assert.Equal(t, string(types.ElectionModeManual), out["mode"])
+	assert.Equal(t, node.ID().String(), out["primary_node"])
+	assert.Equal(t, true, out["has_primary"])
+
+	snap := snapshot()
+	assert.Equal(t, string(types.ElectionModeManual), snap["mode"])
+	assert.Equal(t, node.ID().String(), snap["primary_node"])
+	assert.Equal(t, true, snap["has_primary"])
+
+	// Switching back to auto clears the fixed primary: in auto
+	// mode any node may become coordinator, so a stored primary
+	// would be stale.
+	code, out = doReq(http.MethodPost, "/web/api/election", map[string]any{
+		"mode": string(types.ElectionModeAuto),
+	})
+	require.Equal(t, http.StatusOK, code, out)
+	assert.NotContains(t, out["status"], "stub")
+	assert.Equal(t, string(types.ElectionModeAuto), out["mode"])
+	assert.Equal(t, false, out["has_primary"])
+	assert.Equal(t, string(types.ElectionModeAuto), snapshot()["mode"])
+	assert.Equal(t, false, snapshot()["has_primary"])
+
+	// The mode switch is the final word: a node_id sent
+	// together with mode "auto" is applied first and then
+	// cleared by the switch, never leaving a stale primary.
+	code, out = doReq(http.MethodPost, "/web/api/election", map[string]any{
+		"mode":    string(types.ElectionModeAuto),
+		"node_id": uint64(node.ID()),
+	})
+	require.Equal(t, http.StatusOK, code, out)
+	assert.Equal(t, false, snapshot()["has_primary"], "auto switch must clear a node_id sent in the same request")
+
+	// Legacy form (node_id only, no mode): set the primary,
+	// leave the mode untouched.
+	code, out = doReq(http.MethodPost, "/web/api/election", map[string]any{
+		"node_id": uint64(node.ID()),
+	})
+	require.Equal(t, http.StatusOK, code, out)
+	assert.NotContains(t, out["status"], "stub")
+	assert.Equal(t, node.ID().String(), snapshot()["primary_node"])
+	assert.Equal(t, true, snapshot()["has_primary"])
+	assert.Equal(t, string(types.ElectionModeAuto), snapshot()["mode"])
+
+	// Unknown mode -> 400 with no state change.
+	code, _ = doReq(http.MethodPost, "/web/api/election", map[string]any{
+		"mode":    "carrier-pigeon",
+		"node_id": uint64(node.ID()),
+	})
+	assert.Equal(t, http.StatusBadRequest, code)
+	assert.Equal(t, string(types.ElectionModeAuto), snapshot()["mode"])
+
+	// Invalid JSON -> 400.
+	code, _ = doReq(http.MethodPost, "/web/api/election", map[string]any{"mode": 42})
+	assert.Equal(t, http.StatusBadRequest, code)
+
+	// Wrong method -> 405.
+	code, _ = doReq(http.MethodPut, "/web/api/election", map[string]any{})
+	assert.Equal(t, http.StatusMethodNotAllowed, code)
+}
