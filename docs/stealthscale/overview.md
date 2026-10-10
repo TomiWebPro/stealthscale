@@ -58,14 +58,14 @@ like ordinary TLS to a network observer:
   [Xray-core](https://github.com/XTLS/Xray-core) ecosystem. A VLESS session
   looks like a plain TLS connection to anything inspecting the stream.
 - **uTLS** — ClientHello fingerprinting (`chrome`, `firefox`, `safari`,
-  `randomized`, `ios` via `hscontrol/xray/client.go:247`). The TLS handshake is
+  `randomized`, `ios` via `hscontrol/xray/client.go:205`). The TLS handshake is
   shaped to mimic a real browser's ClientHello, defeating active fingerprinting.
 - **Reality (xtls/reality, MPL-2.0)** — the server steals the live TLS handshake
   of the decoy dest (default `www.cloudflare.com:443`, with
   `www.microsoft.com:443` as second decoy) via `github.com/xtls/reality`
-  (`hscontrol/xray/server.go:140` `buildRealityConfig` + `reality.Server`).
+  (`hscontrol/xray/server.go:159` `buildRealityConfig` + `reality.Server`).
   The client validates the server via its Reality public key
-  (`hscontrol/xray/reality_client.go:66` `VerifyPeerCertificate`), not the
+  (`hscontrol/xray/reality_client.go:79` `VerifyPeerCertificate`), not the
   certificate. The dest's 2044-byte EncryptedExtensions (Cloudflare) vs 32 for a
   self-signed local dest is handled (`reality.DetectPostHandshakeRecordsLens`).
 - **Noise** — the standard Tailscale control protocol (TS2021) still runs, but
@@ -158,12 +158,12 @@ StealthScale's default transport is **VLESS + Reality (xtls/reality) + uTLS**
 (`xray.security: reality_xtls`). The server steals the live TLS handshake of
 the decoy dest (default `www.cloudflare.com:443`, dual decoys
 `www.cloudflare.com`/`www.microsoft.com` + bare domains) via
-`github.com/xtls/reality` (`hscontrol/xray/server.go:140`) and `utls` shapes
+`github.com/xtls/reality` (`hscontrol/xray/server.go:159`) and `utls` shapes
 the ClientHello to mimic Chrome/Firefox. The client validates the server via
-its Reality public key (`hscontrol/xray/reality_client.go:66`) and SessionId
+its Reality public key (`hscontrol/xray/reality_client.go:79`) and SessionId
 AEAD, not the certificate. `xray.reality.dest`, `server_names`, `short_ids`,
 `private_key`/`public_key`, and `spider_x` are all configurable (see
-`config-example.yaml:129`); `xray.secret` must be stable for postgres (see
+`config-example.yaml:137`); `xray.secret` must be stable for postgres (see
 below).
 
 Because DERP relays are themselves fingerprintable, StealthScale **gates DERP
