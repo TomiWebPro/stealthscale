@@ -461,3 +461,135 @@ func TestWebUI_DERPRuntimeApplyDelegatesToRealState(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, code)
 	assert.True(t, st.DERPMapIsRuntime())
 }
+
+// TestWebUI_AuthFinishDelegatesToRealState pins the WebUI
+// auth session endpoints (status / approve / reject) against
+// a real *state.State: the authCacheReader delegation must be
+// satisfied (no stub fallback) and a decided SSH-check
+// session must actually deliver its verdict to the waiting
+// client. The failure mode is silent: if the type-asserted
+// delegation stops matching, the handlers answer 200 with a
+// "stub" status and no verdict is ever delivered, leaving the
+// SSH check hanging until its own timeout.
+func TestWebUI_AuthFinishDelegatesToRealState(t *testing.T) {
+	srv := NewServer(t)
+	defer srv.Close()
+
+	st := srv.State()
+
+	h := webui.Handler(&types.Config{}, st) //nolint:exhaustruct_v5 // test fixture: zero config
+
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	doReq := func(method, path string, body any) (int, map[string]any) {
+		var rdr *bytes.Reader
+
+		if body != nil {
+			b, err := json.Marshal(body)
+			require.NoError(t, err)
+
+			rdr = bytes.NewReader(b)
+		} else {
+			rdr = bytes.NewReader(nil)
+		}
+
+		req, err := http.NewRequestWithContext(context.Background(), method, ts.URL+path, rdr)
+		require.NoError(t, err)
+
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+
+		defer resp.Body.Close()
+
+		out := map[string]any{}
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+
+		return resp.StatusCode, out
+	}
+
+	// verdictOf reads the verdict a decided session delivers
+	// to its waiting client, failing the test when nothing
+	// arrives (the delegation-drift failure mode).
+	verdictOf := func(authReq *types.AuthRequest) types.AuthVerdict {
+		t.Helper()
+
+		select {
+		case v := <-authReq.WaitForAuth():
+			return v
+		case <-time.After(5 * time.Second):
+			t.Fatal("no verdict delivered to the waiting client")
+			return types.AuthVerdict{Err: nil, Node: types.NodeView{}}
+		}
+	}
+
+	user := srv.CreateUser(t, "webui-auth")
+
+	src := srv.CreateRegisteredNode(t, user, "sshcheck-src")
+	dst := srv.CreateRegisteredNode(t, user, "sshcheck-dst")
+
+	// Status of a pending SSH-check session (no stub field).
+	sshAuthID := types.MustAuthID()
+	sshReq := types.NewSSHCheckAuthRequest(src.ID(), dst.ID())
+	st.SetAuthCacheEntry(sshAuthID, sshReq)
+
+	code, out := doReq(http.MethodGet, "/web/api/auth/"+sshAuthID.String(), nil)
+	require.Equal(t, http.StatusOK, code, out)
+	assert.Equal(t, true, out["pending"])
+	assert.Equal(t, false, out["registration"])
+	assert.Equal(t, true, out["sshCheck"])
+
+	// Approve: the verdict must reach the waiting client.
+	code, out = doReq(http.MethodPost, "/web/api/auth/"+sshAuthID.String()+"/approve", map[string]any{})
+	require.Equal(t, http.StatusOK, code, out)
+	assert.NotContains(t, out["status"], "stub")
+	assert.Equal(t, true, out["approved"])
+
+	verdict := verdictOf(sshReq)
+	assert.True(t, verdict.Accept(), "approve must deliver an accepting verdict")
+
+	// Reject: a failing verdict carrying the rejection error.
+	rejAuthID := types.MustAuthID()
+	rejReq := types.NewSSHCheckAuthRequest(src.ID(), dst.ID())
+	st.SetAuthCacheEntry(rejAuthID, rejReq)
+
+	code, out = doReq(http.MethodPost, "/web/api/auth/"+rejAuthID.String()+"/reject", map[string]any{})
+	require.Equal(t, http.StatusOK, code, out)
+	assert.NotContains(t, out["status"], "stub")
+	assert.Equal(t, false, out["approved"])
+
+	verdict = verdictOf(rejReq)
+	assert.False(t, verdict.Accept(), "reject must deliver a failing verdict")
+	require.Error(t, verdict.Err)
+	assert.Contains(t, verdict.Err.Error(), "rejected")
+
+	// Registration sessions are refused: they are completed
+	// via the node's auth URL, and a verdict here (carrying
+	// no node) would silently restart the registration.
+	regAuthID := types.MustAuthID()
+	regReq := types.NewRegisterAuthRequest(&types.RegistrationData{}) //nolint:exhaustruct_v5 // test fixture: only IsRegistration() is consulted
+	st.SetAuthCacheEntry(regAuthID, regReq)
+
+	code, _ = doReq(http.MethodPost, "/web/api/auth/"+regAuthID.String()+"/approve", map[string]any{})
+	assert.Equal(t, http.StatusConflict, code)
+
+	select {
+	case v := <-regReq.WaitForAuth():
+		t.Fatalf("approve must not decide a registration session, got verdict %+v", v)
+	default:
+	}
+
+	// Unknown auth id -> 404.
+	code, _ = doReq(http.MethodGet, "/web/api/auth/"+types.MustAuthID().String(), nil)
+	assert.Equal(t, http.StatusNotFound, code)
+
+	// Malformed auth id -> 400.
+	code, _ = doReq(http.MethodGet, "/web/api/auth/not-an-auth-id", nil)
+	assert.Equal(t, http.StatusBadRequest, code)
+
+	// Wrong method -> 405.
+	code, _ = doReq(http.MethodPut, "/web/api/auth/"+sshAuthID.String(), map[string]any{})
+	assert.Equal(t, http.StatusMethodNotAllowed, code)
+}
