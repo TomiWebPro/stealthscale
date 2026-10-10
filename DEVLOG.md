@@ -366,3 +366,7 @@ Format:
 - docs updated in the same commit per DOCS RULE: docs/ref/api.md gains approve/reject curl examples and states the endpoints decide SSH-check sessions only (registration sessions → 409, completed via the node's auth URL or auth/register); huma Operation summaries updated so /api/v1/docs reflects the SSH-check scope
 - verified: GOTOOLCHAIN=go1.26.7 (Makefile pin) go build ./... green and go test -short -count=1 ./hscontrol/ green (212.8s); targeted go test -run 'TestAPIV1Auth(Approve|Reject)' green including both new subtests; TestWebUI_AuthApproveReject and TestWebUI_ManagementDelegatesToRealState still green; golangci-lint run --new-from-rev=HEAD ./hscontrol/api/v1/... and ./hscontrol/ → 0 issues (fixed 2 noinlineerr); gofmt clean. Ambient go1.27.1 hscontrol run fails only on the known SSH-testdata issue (TestSSHActionHoldAndDelegate_PersistsAuthSession, "json encode failed" → 500; closed issue 202610082015 — verified failing on the base tree without my changes; the Makefile pins go1.26.7 so CI/dev are unaffected)
 - issues filed: none | issues closed: 202610100626-api-v1-auth-approve-restarts-registration
+
+## 2026-10-10 06:57 UTC — stealth-builder
+
+- concurrency guard passed (lock stale: 06:35 UTC, ~21 min old > 15 min threshold); no open issues (open/ and in-progress/ empty) — cycle aborted (queue empty)
