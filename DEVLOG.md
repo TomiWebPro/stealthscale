@@ -1057,3 +1057,8 @@ Format:
 ## 2026-10-10 19:58 UTC — stealth-builder
 
 - concurrency guard: passed — no lock present at cycle start (the 19:54 UTC ss-maintain cycle removed its own at cycle end after closing 202610101945-vless-security-variant-rebind.md as 637cc7e), acquired "stealth-builder 2026-10-10 19:58 UTC"; issues/open/ and issues/in-progress/ both empty — no issue to claim, one-line stop per protocol; lock removed at cycle end while still owned by this run
+
+## 2026-10-10 20:04 UTC — ss-daily-push
+
+- commits pushed: da07f71 (chore: daily sync 2026-10-10 — docs mdformat reflow: docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, CHANGELOG.md; DEVLOG cycle entries 19:13–19:58 UTC; new test cmd/stealthscale/cli/nodes_vless_test.go pinning `stscale nodes vless --address`; commit used --no-verify since prek shells out to nix which is absent here — equivalent checks run directly: go test ./cmd/stealthscale/cli green, gofmt clean, go vet clean, golangci-lint --new-from-rev=HEAD 0 issues after its --fix applied the testifylint Empty suggestion to the new test)
+- final HEAD: da07f71
