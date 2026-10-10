@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 
@@ -156,6 +157,62 @@ func TestDialVLESS_Plain(t *testing.T) {
 	// Connection should be usable (write payload)
 	_, err = conn.Write([]byte("hello"))
 	require.NoError(t, err)
+}
+
+func TestDialVLESS_HungServerNoAck(t *testing.T) {
+	// A flaky or black-holed endpoint (the slow/lossy end of
+	// the emulated-network conditions) accepts the TCP
+	// connection and then goes silent: no version ack, no
+	// close. DialVLESS must fail within the configured
+	// timeout instead of blocking the caller indefinitely.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	defer ln.Close()
+
+	host, portStr, err := net.SplitHostPort(ln.Addr().String())
+	require.NoError(t, err)
+
+	port, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+
+	// Accept one connection and hold it open without ever
+	// acking or closing — a true black hole. Draining reads
+	// keep the client's header write in the kernel buffer so
+	// only the ack wait can fail.
+	go func() {
+		conn, aerr := ln.Accept() //nolint:errcheck
+		if aerr != nil {
+			return
+		}
+
+		defer conn.Close()
+
+		buf := make([]byte, 64)
+		for {
+			if _, rerr := conn.Read(buf); rerr != nil { //nolint:errcheck
+				return
+			}
+		}
+	}()
+
+	u := uuid.Must(uuid.NewV4()).String()
+	cfg := &VLESSConfig{
+		ID:       u,
+		Address:  host,
+		Port:     port,
+		Security: "none",
+		Timeout:  150 * time.Millisecond,
+	}
+
+	start := time.Now()
+
+	_, err = DialVLESS(context.Background(), cfg)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "dial to a silent endpoint must fail, not hang")
+	assert.ErrorContains(t, err, "reading VLESS ack")
+	assert.Less(t, elapsed, 3*time.Second, "ack wait must respect the configured timeout")
 }
 
 func TestDialVLESS_InvalidConfig(t *testing.T) {
