@@ -4,16 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
 // setUpFlag sets a flag on upCmd and restores its previous
@@ -343,4 +348,276 @@ func TestPendingRegistrationMessageSurfacesAuthURL(t *testing.T) {
 		"register response: machine not yet authorized (check authkey or approve via coordinator)",
 		pendingRegistrationMessage(""),
 		"no URL minted: fall back to the generic hint, never an empty URL")
+}
+
+// scriptedResponse is one canned RoundTrip answer.
+type scriptedResponse struct {
+	status int
+	body   string
+}
+
+// scriptedTransport answers RoundTrip from a fixed script
+// and records the decoded RegisterRequest of every call.
+// When the script is exhausted the last entry repeats, so
+// an "always failing" script keeps failing for as long as
+// the caller retries.
+type scriptedTransport struct {
+	t         *testing.T
+	responses []scriptedResponse
+	requests  []tailcfg.RegisterRequest
+}
+
+func (rt *scriptedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt.t.Helper()
+
+	if len(rt.responses) == 0 {
+		rt.t.Fatal("scriptedTransport: empty response script")
+	}
+
+	var regReq tailcfg.RegisterRequest
+
+	if req.Body != nil {
+		data, err := io.ReadAll(req.Body)
+		require.NoError(rt.t, err)
+		require.NoError(rt.t, json.Unmarshal(data, &regReq))
+	}
+
+	rt.requests = append(rt.requests, regReq)
+
+	i := len(rt.requests) - 1
+
+	if i >= len(rt.responses) {
+		i = len(rt.responses) - 1
+	}
+
+	next := rt.responses[i]
+
+	//nolint:exhaustruct_v5 // test fixture: only the fields registerOnce reads
+	return &http.Response{
+		StatusCode: next.status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(next.body)),
+		Request:    req,
+	}, nil
+}
+
+// interactiveRegistrationFixture builds the RegisterRequest
+// `stscale up` sends for an interactive (no pre-auth key)
+// registration: the node identity and announced hostname
+// must survive onto every followup poll.
+func interactiveRegistrationFixture(nodeKey key.NodePublic) tailcfg.RegisterRequest {
+	//nolint:exhaustruct_v5 // test fixture: only the identity fields matter
+	return tailcfg.RegisterRequest{
+		Version: tailcfg.CurrentCapabilityVersion,
+		NodeKey: nodeKey,
+		//nolint:exhaustruct_v5 // test fixture: only the hostname matters
+		Hostinfo: &tailcfg.Hostinfo{Hostname: "interactive-node"},
+	}
+}
+
+// TestCompleteInteractiveRegistrationPollsUntilAuthorized
+// pins the interactive half of the join flow (no --authkey):
+// the pending answer's registration URL becomes the followup
+// poll, the poll carries no auth key, and the loop survives
+// a transient poll failure (the coordinator's wait window
+// expiring) until the operator's approval verdict lands.
+func TestCompleteInteractiveRegistrationPollsUntilAuthorized(t *testing.T) {
+	t.Parallel()
+
+	const authURL = "http://ctl.example.com/register/0123456789abcdef"
+
+	nodeKey := key.NewNode()
+
+	//nolint:exhaustruct_v5 // test fixture: requests fills up during RoundTrip
+	rt := &scriptedTransport{
+		t: t,
+		responses: []scriptedResponse{
+			{status: http.StatusOK, body: `{"AuthURL":"` + authURL + `"}`},
+			{status: http.StatusUnauthorized, body: "registration timed out"},
+			{status: http.StatusOK, body: `{"MachineAuthorized":true,"User":{"ID":1,"DisplayName":"alice"},"Login":{"Provider":"web","LoginName":"alice@example.com"}}`},
+		},
+	}
+
+	resp, err := completeInteractiveRegistration(context.Background(), rt, interactiveRegistrationFixture(nodeKey.Public()), authURL, 5*time.Second)
+	require.NoError(t, err)
+	require.True(t, resp.MachineAuthorized)
+
+	//nolint:exhaustruct_v5 // test fixture: only ID and DisplayName are set
+	assert.Equal(t, tailcfg.User{ID: 1, DisplayName: "alice"}, resp.User)
+	assert.Equal(t, "alice@example.com", resp.Login.LoginName)
+
+	require.Len(t, rt.requests, 3)
+
+	// Every recorded request is a followup poll (the
+	// initial register request is sent by RunE before
+	// the polling loop starts): each must carry the
+	// session URL and no auth key.
+	for i, got := range rt.requests {
+		assert.Equal(t, authURL, got.Followup, "poll %d must carry the registration URL as followup", i)
+		assert.Nil(t, got.Auth, "poll %d must not carry an auth key", i)
+		assert.Equal(t, nodeKey.Public(), got.NodeKey, "poll %d must keep the node identity", i)
+		assert.Equal(t, "interactive-node", got.Hostinfo.Hostname, "poll %d must keep the announced hostname", i)
+	}
+}
+
+// TestCompleteInteractiveRegistrationFollowsRestartedURL
+// pins the rejection/expiry restart: when the coordinator
+// answers a poll with a fresh registration URL, the CLI
+// surfaces it and keeps polling the NEW URL — the operator
+// must approve the fresh session, so polling the dead one
+// would hang the join until the budget expired.
+func TestCompleteInteractiveRegistrationFollowsRestartedURL(t *testing.T) {
+	t.Parallel()
+
+	firstURL := "http://ctl.example.com/register/first"
+	restartedURL := "http://ctl.example.com/register/restarted"
+
+	//nolint:exhaustruct_v5 // test fixture: requests fills up during RoundTrip
+	rt := &scriptedTransport{
+		t: t,
+		responses: []scriptedResponse{
+			{status: http.StatusOK, body: `{"AuthURL":"` + firstURL + `"}`},
+			{status: http.StatusOK, body: `{"AuthURL":"` + restartedURL + `"}`},
+			{status: http.StatusOK, body: `{"MachineAuthorized":true,"User":{"ID":1,"DisplayName":"alice"},"Login":{"Provider":"web","LoginName":"alice@example.com"}}`},
+		},
+	}
+
+	nodeKey := key.NewNode()
+
+	resp, err := completeInteractiveRegistration(context.Background(), rt, interactiveRegistrationFixture(nodeKey.Public()), firstURL, 5*time.Second)
+	require.NoError(t, err)
+	require.True(t, resp.MachineAuthorized)
+
+	require.Len(t, rt.requests, 3)
+
+	assert.Equal(t, firstURL, rt.requests[1].Followup)
+	assert.Equal(t, restartedURL, rt.requests[2].Followup, "the poll must follow the restarted session URL")
+}
+
+// TestCompleteInteractiveRegistrationTimesOut pins the
+// budget: a coordinator that never authorizes the
+// registration (every poll fails) ends the join with an
+// actionable error instead of hanging or hammering the
+// coordinator — the retry delay bounds the polling rate.
+func TestCompleteInteractiveRegistrationTimesOut(t *testing.T) {
+	t.Parallel()
+
+	//nolint:exhaustruct_v5 // test fixture: requests fills up during RoundTrip
+	rt := &scriptedTransport{
+		t: t,
+		responses: []scriptedResponse{
+			{status: http.StatusUnauthorized, body: "registration timed out"},
+		},
+	}
+
+	start := time.Now()
+
+	_, err := completeInteractiveRegistration(
+		context.Background(),
+		rt,
+		interactiveRegistrationFixture(key.NewNode().Public()),
+		"http://ctl.example.com/register/0123456789abcdef",
+		100*time.Millisecond,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "interactive registration not completed")
+	assert.Contains(t, err.Error(), "registration timed out")
+	assert.Less(t, time.Since(start), 5*time.Second, "the budget must bound the loop")
+
+	// 100ms of budget with a 500ms retry delay allows
+	// only the first poll, never a hot loop.
+	assert.LessOrEqual(t, len(rt.requests), 2)
+}
+
+// TestCompleteInteractiveRegistrationWithoutURL pins the
+// guard: a pending answer without a registration URL is a
+// hard error — there is no handle on the session, so
+// polling cannot even start.
+func TestCompleteInteractiveRegistrationWithoutURL(t *testing.T) {
+	t.Parallel()
+
+	rt := &scriptedTransport{t: t} //nolint:exhaustruct_v5 // test fixture: no answers are scripted
+
+	_, err := completeInteractiveRegistration(context.Background(), rt, interactiveRegistrationFixture(key.NewNode().Public()), "", 5*time.Second)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no registration URL provided")
+	assert.Empty(t, rt.requests, "the guard must fire before any request is sent")
+}
+
+// TestCompleteInteractiveRegistrationNeighboringFailureModes
+// pins the failure modes a poll answer can carry: a dropped
+// registration URL (no followup left to poll — must fail
+// closed instead of silently minting fresh sessions), an
+// expired node key, and a still-pending answer that carries
+// the same URL (must keep polling, not error).
+func TestCompleteInteractiveRegistrationNeighboringFailureModes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("poll answer without URL fails closed", func(t *testing.T) {
+		t.Parallel()
+
+		//nolint:exhaustruct_v5 // test fixture: requests fills up during RoundTrip
+		rt := &scriptedTransport{
+			t: t,
+			responses: []scriptedResponse{
+				{status: http.StatusOK, body: `{}`},
+			},
+		}
+
+		_, err := completeInteractiveRegistration(
+			context.Background(),
+			rt,
+			interactiveRegistrationFixture(key.NewNode().Public()),
+			"http://ctl.example.com/register/0123456789abcdef",
+			5*time.Second,
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no registration URL provided")
+	})
+
+	t.Run("poll answer with expired node key errors", func(t *testing.T) {
+		t.Parallel()
+
+		//nolint:exhaustruct_v5 // test fixture: requests fills up during RoundTrip
+		rt := &scriptedTransport{
+			t: t,
+			responses: []scriptedResponse{
+				{status: http.StatusOK, body: `{"NodeKeyExpired":true}`},
+			},
+		}
+
+		_, err := completeInteractiveRegistration(
+			context.Background(),
+			rt,
+			interactiveRegistrationFixture(key.NewNode().Public()),
+			"http://ctl.example.com/register/0123456789abcdef",
+			5*time.Second,
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "node key expired")
+	})
+
+	t.Run("still-pending answer keeps polling", func(t *testing.T) {
+		t.Parallel()
+
+		const authURL = "http://ctl.example.com/register/0123456789abcdef"
+
+		//nolint:exhaustruct_v5 // test fixture: requests fills up during RoundTrip
+		rt := &scriptedTransport{
+			t: t,
+			responses: []scriptedResponse{
+				{status: http.StatusOK, body: `{"AuthURL":"` + authURL + `"}`},
+				{status: http.StatusOK, body: `{"AuthURL":"` + authURL + `"}`},
+				{status: http.StatusOK, body: `{"MachineAuthorized":true,"User":{"ID":1,"DisplayName":"alice"},"Login":{"Provider":"web","LoginName":"alice@example.com"}}`},
+			},
+		}
+
+		resp, err := completeInteractiveRegistration(context.Background(), rt, interactiveRegistrationFixture(key.NewNode().Public()), authURL, 5*time.Second)
+		require.NoError(t, err)
+		require.True(t, resp.MachineAuthorized)
+
+		require.Len(t, rt.requests, 3)
+
+		assert.Equal(t, authURL, rt.requests[2].Followup)
+	})
 }

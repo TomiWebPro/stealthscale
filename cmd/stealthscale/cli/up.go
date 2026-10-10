@@ -86,6 +86,11 @@ Examples:
   # Alias endpoint
   stscale up --coordinator https://ctl.example.com --authkey <key> --endpoint 'vless://...'
 
+  # Interactive join without a pre-auth key: up prints a
+  # registration URL, you approve it, and up polls until
+  # the join completes:
+  stscale up --coordinator https://ctl.example.com --node-id 1
+
   # Check stealth/DERP status
   stscale health
   curl -s http://127.0.0.1:8080/web/api/derp | jq .stealth_satisfied
@@ -164,7 +169,7 @@ Examples:
 			}
 		}
 		if authKey == "" {
-			pterm.Warning.Println("no --authkey provided; will attempt interactive registration if the server allows it")
+			pterm.Warning.Println("no --authkey provided; attempting interactive registration (approve the printed registration URL to join)")
 		}
 		if hostname == "" {
 			if hn, err := os.Hostname(); err == nil {
@@ -184,8 +189,8 @@ Examples:
 		defer conn.Close()
 		pterm.Success.Printf("VLESS handshake succeeded to %s:%d (security=%s, utls=%s)\n", cfg.Address, cfg.Port, cfg.Security, cfg.FP)
 
-		if coordinator == "" || authKey == "" {
-			pterm.Success.Println("stealth verification complete. Provide --coordinator and --authkey to register.")
+		if coordinator == "" {
+			pterm.Success.Println("stealth verification complete. Provide --coordinator to register.")
 			return nil
 		}
 
@@ -237,51 +242,187 @@ Examples:
 		}
 		defer tr.CloseIdleConnections()
 
+		// With no --authkey the request carries no Auth: the
+		// coordinator answers with a registration URL
+		// (interactive registration) instead of authorizing
+		// immediately.
 		regReq := tailcfg.RegisterRequest{
 			Version:  tailcfg.CurrentCapabilityVersion,
 			NodeKey:  nodeKey.Public(),
 			Hostinfo: &tailcfg.Hostinfo{Hostname: hostname},
-			Auth:     &tailcfg.RegisterResponseAuth{AuthKey: authKey},
 		}
-		body, err := json.Marshal(regReq)
-		if err != nil {
-			return fmt.Errorf("marshaling register request: %w", err)
+
+		if authKey != "" {
+			//nolint:exhaustruct_v5 // only the auth key is set on the registration
+			regReq.Auth = &tailcfg.RegisterResponseAuth{AuthKey: authKey}
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://control/machine/register", bytes.NewReader(body))
-		if err != nil {
-			return fmt.Errorf("creating register request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
 
 		pterm.Info.Println("sending RegisterRequest over VLESS+noise (HTTP/2)...")
-		resp, err := tr.RoundTrip(req)
+
+		regResp, err := registerOnce(ctx, tr, regReq)
 		if err != nil {
-			return fmt.Errorf("register RoundTrip over VLESS+noise: %w", err)
+			return err
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			var errBody bytes.Buffer
-			_, _ = errBody.ReadFrom(resp.Body)
-			return fmt.Errorf("register failed: HTTP %d: %s", resp.StatusCode, errBody.String())
-		}
-		var regResp tailcfg.RegisterResponse
-		if err := json.NewDecoder(resp.Body).Decode(&regResp); err != nil {
-			return fmt.Errorf("decoding register response: %w", err)
-		}
-		if regResp.Error != "" {
-			return fmt.Errorf("register error: %s", regResp.Error)
-		}
-		if !regResp.MachineAuthorized {
-			pterm.Warning.Println(pendingRegistrationMessage(regResp.AuthURL))
-		}
+
 		if regResp.NodeKeyExpired {
-			return fmt.Errorf("register response: node key expired")
+			return errRegisterNodeKeyExpired
+		}
+
+		if !regResp.MachineAuthorized {
+			// Interactive registration: the operator completes
+			// the join at the printed registration URL, and
+			// the followup polls deliver the approval verdict
+			// back here.
+			regResp, err = completeInteractiveRegistration(ctx, tr, regReq, regResp.AuthURL, interactiveRegistrationTimeout)
+			if err != nil {
+				return err
+			}
 		}
 		pterm.Success.Printf("registered as %s (authorized=%v, nodeKey=%s)\n", hostname, regResp.MachineAuthorized, nodeKey.Public().ShortString())
 
 		pterm.Success.Println("node is ready to serve as coordinator+client (unified). Run 'stscale serve' on this host to also coordinate.")
 		return nil
 	},
+}
+
+// interactiveRegistrationTimeout bounds how long `stscale up`
+// waits for an interactive registration to be approved: the
+// coordinator holds each followup poll open until the
+// operator's verdict arrives, so this is an upper bound for
+// a slow approval, not a busy loop.
+const interactiveRegistrationTimeout = 10 * time.Minute
+
+// interactivePollRetryDelay backs off between followup polls
+// when the coordinator answers immediately (its own wait
+// window expired, or it restarted the session) instead of
+// holding the poll open.
+const interactivePollRetryDelay = 500 * time.Millisecond
+
+// registerOnce sends one RegisterRequest over the
+// noise-backed HTTP/2 transport and decodes the
+// coordinator's answer. It is the single request unit of
+// both the pre-auth-key join and the interactive
+// registration followup polls.
+func registerOnce(
+	ctx context.Context,
+	tr http.RoundTripper,
+	req tailcfg.RegisterRequest,
+) (*tailcfg.RegisterResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling register request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://control/machine/register", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("creating register request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := tr.RoundTrip(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("register RoundTrip over VLESS+noise: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errBody bytes.Buffer
+
+		_, _ = errBody.ReadFrom(resp.Body)
+
+		return nil, fmt.Errorf("%w: HTTP %d: %s", errRegisterFailed, resp.StatusCode, errBody.String())
+	}
+
+	var regResp tailcfg.RegisterResponse
+
+	err = json.NewDecoder(resp.Body).Decode(&regResp)
+	if err != nil {
+		return nil, fmt.Errorf("decoding register response: %w", err)
+	}
+
+	if regResp.Error != "" {
+		return nil, fmt.Errorf("%w: %s", errRegisterError, regResp.Error)
+	}
+
+	return &regResp, nil
+}
+
+// completeInteractiveRegistration performs the pending half
+// of an interactive (no pre-auth key) registration: it
+// prints the registration URL the operator must complete,
+// then polls the coordinator's followup endpoint
+// (RegisterRequest.Followup) until the operator's verdict
+// turns the join into an authorized node. The coordinator
+// restarts the session by answering a poll with a fresh
+// AuthURL (rejection or expiry); the new URL is surfaced
+// and polled in turn.
+func completeInteractiveRegistration(
+	ctx context.Context,
+	tr http.RoundTripper,
+	req tailcfg.RegisterRequest,
+	authURL string,
+	timeout time.Duration,
+) (*tailcfg.RegisterResponse, error) {
+	if authURL == "" {
+		return nil, errRegisterNotAuthorized
+	}
+
+	pterm.Warning.Println(pendingRegistrationMessage(authURL))
+	pterm.Info.Printf("waiting for the operator to approve the registration (up to %s)...\n", timeout)
+
+	// The dial-timeout context is far too short for an
+	// operator to approve the join in a browser; poll under
+	// a fresh budget instead.
+	pollCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+
+	// The followup poll is a plain RegisterRequest carrying
+	// the session's followup URL and no auth key: the
+	// coordinator identifies the pending session by the auth
+	// ID in the URL and the Noise session by the machine
+	// key, so the node identity must stay on every poll.
+	req.Followup = authURL
+	req.Auth = nil
+
+	var lastErr error
+
+	for {
+		resp, err := registerOnce(pollCtx, tr, req)
+		if err != nil {
+			// The coordinator's wait window expired (or the
+			// connection dropped) before the verdict arrived:
+			// expected while the operator has not completed
+			// the registration URL yet. Retry within budget.
+			lastErr = err
+		} else if resp.NodeKeyExpired {
+			return nil, errRegisterNodeKeyExpired
+		} else if resp.MachineAuthorized {
+			return resp, nil
+		} else if resp.AuthURL == "" {
+			return nil, errRegisterNotAuthorized
+		} else if resp.AuthURL != authURL {
+			// The coordinator restarted the session (the
+			// registration was rejected or expired): keep
+			// polling the fresh URL and surface it — the
+			// operator must act on the new URL.
+			authURL = resp.AuthURL
+
+			req.Followup = authURL
+
+			pterm.Warning.Println(pendingRegistrationMessage(authURL))
+		}
+
+		select {
+		case <-pollCtx.Done():
+			if lastErr != nil {
+				return nil, fmt.Errorf("%w within %s: %w", errInteractiveRegistrationTimedOut, timeout, lastErr)
+			}
+
+			return nil, fmt.Errorf("%w within %s", errInteractiveRegistrationTimedOut, timeout)
+		case <-time.After(interactivePollRetryDelay):
+		}
+	}
 }
 
 // pendingRegistrationMessage renders the warning shown when the
@@ -455,6 +596,17 @@ var (
 	)
 	errFetchVLESSStatus = errors.New("fetching VLESS endpoint")
 	errNoVLESSURI       = errors.New("coordinator returned no VLESS URI")
+)
+
+// Static errors for the machine-API register flow, same
+// pattern: the dynamic parts (status code, response body,
+// budget) are added by the caller via %w formatting.
+var (
+	errRegisterFailed                  = errors.New("register failed")
+	errRegisterError                   = errors.New("register error")
+	errRegisterNodeKeyExpired          = errors.New("register response: node key expired")
+	errRegisterNotAuthorized           = errors.New("register response: machine not authorized and no registration URL provided")
+	errInteractiveRegistrationTimedOut = errors.New("interactive registration not completed")
 )
 
 // fetchVLESSURI fetches a node's VLESS endpoint URI from the

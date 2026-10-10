@@ -127,6 +127,9 @@ stscale up \
   --node-id 1
 ```
 
+Without a pre-auth key, drop `--authkey`: `stscale up` prints a registration
+URL and the join completes in the same command once you approve it there.
+
 The `vless://` URI for a node can also be printed on the coordinator
 (with `stscale nodes vless <node-id>`) and passed via `--vless-uri` —
 see [docs/stealthscale/clients.md](docs/stealthscale/clients.md).

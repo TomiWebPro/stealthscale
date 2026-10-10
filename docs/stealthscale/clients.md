@@ -133,6 +133,16 @@ endpoint (e.g. `stscale nodes list` to confirm it exists).
 
 ## Registering a node — unified binary (recommended)
 
+Interactive (no pre-auth key) — `stscale up` prints the
+node's registration URL and waits for you to approve it;
+the join completes in the same command:
+
+```shell
+stscale up \
+  --coordinator https://ctl.example.com \
+  --node-id 1
+```
+
 With a pre-auth key from the coordinator
 ([create one first](install.md#register-users-and-preauth-keys)):
 
@@ -183,15 +193,17 @@ stealth** — the control path runs inside the stealth stream rather than as a
 plaintext port. Holepunching via DERP/STUN for NAT traversal is exempt and is
 only used when stealth is satisfied (`xray.stealth.enforce: true`, fail-closed).
 
-If the coordinator does not authorize the registration immediately, `stscale up`
-reports that the machine is not yet authorized and prints the node's registration
-URL. That URL embeds the auth ID and is the only handle on the pending session:
-open it in a browser (the web provider renders the exact
-`stealthscale auth register --auth-id <id> --user <user>` command to run on the
-coordinator; the OIDC provider shows a confirmation page), or copy the auth ID
-out of the URL and run that command yourself. The `auth approve`/`auth reject`
-commands decide SSH-check sessions only — registration sessions are completed via
-the registration URL.
+Without a pre-auth key, `stscale up` registers interactively in the same
+command: it prints the node's registration URL and polls the coordinator for up
+to 10 minutes while you complete it. That URL embeds the auth ID and is the only
+handle on the pending session: open it in a browser (the web provider renders
+the exact `stealthscale auth register --auth-id <id> --user <user>` command to
+run on the coordinator; the OIDC provider shows a confirmation page), or copy
+the auth ID out of the URL and run that command yourself — `stscale up` finishes
+the join as soon as the verdict arrives (a rejection or an expired session
+restarts the registration and prints the new URL). The `auth approve`/`auth
+reject` commands decide SSH-check sessions only — registration sessions are
+completed via the registration URL.
 
 The coordinator is also a node: running `stscale serve` on any device makes it
 both a node and a coordinator (on by default). Point another device at it with
