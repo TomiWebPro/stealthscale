@@ -639,3 +639,10 @@ Format:
 
 - concurrency guard: /tmp/ss/agent.lock held by ss-maintain (mtime 10:34 UTC, ~4 min old, < 15 min threshold) — skipped cycle
 - also: no open issues (open/ and in-progress/ empty)
+
+## 2026-10-10 10:46 UTC — stealth-builder
+
+- concurrency guard: /tmp/ss/agent.lock held by ss-maintain (content ts 10:34 UTC, mtime 10:34 UTC, ~12 min old, < 15 min threshold) — skipped cycle
+- also: no open issues (open/ and in-progress/ empty)
+- dirty tree (CHANGELOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, hscontrol/dns/extrarecords_test.go, untracked cmd/stealthscale/cli/nodes_vless_test.go) belongs to the concurrent ss-maintain run — left untouched per ownership rules
+- commit: TBD (devlog-only; --no-verify: prek shells out to nix, absent in this env)
