@@ -27,6 +27,13 @@ const (
 
 var errNodeNotFoundAfterSetup = errors.New("node not found after setup")
 
+// errFollowupRejected mimics the rejection verdict a decide
+// endpoint delivers (api/v1 errAuthRejected, webui
+// errWebAuthRejected) for the rejected-verdict subtest of
+// TestFollowupVerdictWithoutNodeRestartsRegistration (err113:
+// no dynamic errors in test fixtures).
+var errFollowupRejected = errors.New("auth request rejected")
+
 // interactiveStep defines a step in the interactive authentication workflow.
 type interactiveStep struct {
 	stepType         string // stepTypeInitialRequest, stepTypeAuthCompletion, or stepTypeFollowupRequest
@@ -4380,4 +4387,103 @@ func TestRegistrationSessionTTLExpiryRestartsFollowup(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("waitForFollowup hung instead of restarting the expired registration session")
 	}
+}
+
+// TestFollowupVerdictWithoutNodeRestartsRegistration pins the
+// last-line-of-defense behavior of [StealthScale.waitForFollowup]
+// when the cached registration session delivers a verdict that
+// carries no node.
+//
+// Every decide endpoint refuses registration sessions outright
+// (WebUI handleAuthFinish and the api/v1 approve/reject endpoints
+// via refuseRegistrationSession both answer 409), so on the
+// documented paths a registration session only ever completes
+// with a node-carrying verdict from [State.HandleNodeFromAuthPath].
+// But the auth cache is shared with SSH-check sessions, whose OIDC
+// callback finishes with a bare [types.AuthVerdict] (accept, no
+// node — see AuthProviderOIDC.OAuthCallback). Should such a
+// node-less verdict ever land on a registration session (session
+// confusion), the poll must not authorize a node-less verdict,
+// hang, or fail: it must restart the flow with a fresh
+// registration URL, exactly like an expired session — the client
+// (stscale up) follows the fresh URL and re-polls.
+func TestFollowupVerdictWithoutNodeRestartsRegistration(t *testing.T) {
+	app := createTestApp(t)
+
+	machineKey := key.NewMachine()
+
+	// Park a pending registration the way handleRegister does for
+	// a keyless node, so the poll finds a cached session.
+	newSession := func(hostname string) (types.AuthID, *types.AuthRequest) {
+		authID, err := types.NewAuthID()
+		require.NoError(t, err)
+
+		regEntry := types.NewRegisterAuthRequest(&types.RegistrationData{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+			MachineKey: machineKey.Public(),
+			NodeKey:    key.NewNode().Public(),
+			Hostname:   hostname,
+		})
+		app.state.SetAuthCacheEntry(authID, regEntry)
+
+		return authID, regEntry
+	}
+
+	poll := func(authID types.AuthID) (*tailcfg.RegisterResponse, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		return app.handleRegister(ctx, tailcfg.RegisterRequest{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+			Followup: fmt.Sprintf("http://localhost:8080/register/%s", authID),
+			NodeKey:  key.NewNode().Public(),
+		}, machineKey.Public())
+	}
+
+	t.Run("accept without node restarts with a fresh registration URL", func(t *testing.T) {
+		authID, regEntry := newSession("verdict-restart-accept")
+
+		// The node-less accept an SSH-check callback would deliver.
+		regEntry.FinishAuth(types.AuthVerdict{}) //nolint:exhaustruct_v5 // test fixture: no fields set
+
+		resp, err := poll(authID)
+
+		require.NoError(t, err, "a node-less accept must restart the flow, not fail the poll")
+		require.NotNil(t, resp)
+		assert.False(t, resp.MachineAuthorized, "a node-less verdict must never authorize the registration")
+		require.NotEmpty(t, resp.AuthURL, "the restart must hand the client a fresh registration URL")
+		assert.NotContains(t, resp.AuthURL, authID.String(), "the fresh URL must not reuse the confused session's ID")
+
+		// Positive control: the restarted session is a real
+		// registration session bound to the polling machine key,
+		// so the client's next poll proceeds normally instead of
+		// bouncing off a non-registration entry.
+		newAuthID, err := types.AuthIDFromString(
+			strings.TrimPrefix(resp.AuthURL, "http://localhost:8080/register/"),
+		)
+		require.NoError(t, err, "fresh AuthURL must carry a parseable registration ID")
+
+		newEntry, ok := app.state.GetAuthCacheEntry(newAuthID)
+		require.True(t, ok, "the restarted registration must be cached for the next followup poll")
+		require.True(t, newEntry.IsRegistration(), "the restarted session must carry registration data")
+		assert.Equal(t, machineKey.Public(), newEntry.RegistrationData().MachineKey,
+			"the restarted session must stay bound to the polling machine key")
+	})
+
+	t.Run("rejected verdict restarts with a fresh registration URL", func(t *testing.T) {
+		authID, regEntry := newSession("verdict-restart-reject")
+
+		// A rejected registration (the shape a decide endpoint
+		// would deliver if it did not refuse registration
+		// sessions) must also restart, not hang or error.
+		regEntry.FinishAuth(types.AuthVerdict{ //nolint:exhaustruct_v5 // test fixture: only Err is set
+			Err: errFollowupRejected,
+		})
+
+		resp, err := poll(authID)
+
+		require.NoError(t, err, "a rejected registration must restart the flow, not fail the poll")
+		require.NotNil(t, resp)
+		assert.False(t, resp.MachineAuthorized, "a rejected registration must never authorize")
+		require.NotEmpty(t, resp.AuthURL, "the restart must hand the client a fresh registration URL")
+		assert.NotContains(t, resp.AuthURL, authID.String(), "the fresh URL must not reuse the rejected session's ID")
+	})
 }
