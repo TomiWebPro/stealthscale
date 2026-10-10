@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,16 +65,20 @@ func signTestIDToken(t *testing.T, key *rsa.PrivateKey, claims map[string]any) s
 // and JWKS are served so a real *oidc.Provider can be built
 // against it. The userinfo endpoint is deliberately not served:
 // the callback must tolerate a failing userinfo fetch (an OIDC
-// hiccup) and proceed on the ID-token claims alone.
-func newSSHCheckCallbackIdP(t *testing.T) (string, string) {
+// hiccup) and proceed on the ID-token claims alone. The second
+// return value counts token-endpoint calls, so tests can assert
+// the callback fails closed BEFORE exchanging an authorization
+// code whose CSRF state did not verify.
+func newSSHCheckCallbackIdP(t *testing.T) (string, *atomic.Int64) {
 	t.Helper()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 
 	var (
-		srv     *httptest.Server
-		idToken string
+		srv        *httptest.Server
+		idToken    string
+		tokenCalls atomic.Int64
 	)
 
 	mux := http.NewServeMux()
@@ -103,6 +108,8 @@ func newSSHCheckCallbackIdP(t *testing.T) (string, string) {
 	})
 
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		tokenCalls.Add(1)
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token": "sshcheck-access-token",
@@ -130,7 +137,7 @@ func newSSHCheckCallbackIdP(t *testing.T) (string, string) {
 		"exp":                now.Add(5 * time.Minute).Unix(),
 	})
 
-	return srv.URL, idToken
+	return srv.URL, &tokenCalls
 }
 
 // newSSHCheckOIDCProvider builds an AuthProviderOIDC wired to
@@ -366,6 +373,115 @@ func TestOIDCCallbackSSHCheckIdentityBinding(t *testing.T) {
 
 			assert.Empty(t, authReq.WaitForAuth(),
 				"a refused SSH check must not deliver any verdict")
+		})
+	}
+}
+
+// TestOIDCCallbackCSRFStateNonceGuards pins the callback's own
+// CSRF verification — the state and nonce checks that gate the
+// authorization-code exchange and every verdict the callback
+// can record. A callback whose query state does not match the
+// browser's state cookie (or whose ID-token nonce does not match
+// the nonce cookie) is a cross-site forgery: it must fail closed
+// with 403/400, and a state that does not verify must never
+// reach the IdP's token endpoint — the code is only exchangeable
+// once the CSRF state has been verified against the cookie.
+func TestOIDCCallbackCSRFStateNonceGuards(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		cookies  []http.Cookie
+		wantCode int
+		// wantExchange reports whether the (verified-state) flow
+		// must reach the IdP's token endpoint before failing.
+		wantExchange bool
+	}{
+		{
+			name: "state cookie value differs from the query state",
+			cookies: []http.Cookie{
+				//nolint:gosec,exhaustruct_v5 // G124: test-fixture cookie
+				{Name: getCookieName("state", sshCheckOIDCState), Value: "tampered-state-differs-from-query"},
+				//nolint:gosec,exhaustruct_v5 // G124: test-fixture cookie
+				{Name: getCookieName("nonce", sshCheckIDTokenNonce), Value: sshCheckIDTokenNonce},
+			},
+			wantCode:     http.StatusForbidden,
+			wantExchange: false,
+		},
+		{
+			name: "state cookie missing",
+			cookies: []http.Cookie{
+				//nolint:gosec,exhaustruct_v5 // G124: test-fixture cookie
+				{Name: getCookieName("nonce", sshCheckIDTokenNonce), Value: sshCheckIDTokenNonce},
+			},
+			wantCode:     http.StatusBadRequest,
+			wantExchange: false,
+		},
+		{
+			name: "nonce cookie missing",
+			cookies: []http.Cookie{
+				//nolint:gosec,exhaustruct_v5 // G124: test-fixture cookie
+				{Name: getCookieName("state", sshCheckOIDCState), Value: sshCheckOIDCState},
+			},
+			wantCode:     http.StatusBadRequest,
+			wantExchange: true,
+		},
+		{
+			name: "nonce cookie value differs from the ID token nonce",
+			cookies: []http.Cookie{
+				//nolint:gosec,exhaustruct_v5 // G124: test-fixture cookie
+				{Name: getCookieName("state", sshCheckOIDCState), Value: sshCheckOIDCState},
+				//nolint:gosec,exhaustruct_v5 // G124: test-fixture cookie
+				{Name: getCookieName("nonce", sshCheckIDTokenNonce), Value: "tampered-nonce"},
+			},
+			wantCode:     http.StatusForbidden,
+			wantExchange: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// A fresh fake IdP per case so the token-endpoint
+			// call count is exact for each parallel subtest.
+			issuer, tokenCalls := newSSHCheckCallbackIdP(t)
+
+			app := createTestApp(t)
+			provider := newSSHCheckOIDCProvider(t, app, issuer)
+
+			// Bind the state to an auth session the way the
+			// /auth handler would have, so only the CSRF guards
+			// can stop this callback.
+			provider.authCache.Add(sshCheckOIDCState, AuthInfo{AuthID: types.MustAuthID()}) //nolint:exhaustruct_v5 // partial literal: only AuthID is set
+
+			// A bare callback request: only the case's cookies
+			// ride along, so a tampered cookie is the one the
+			// handler finds (http.Request.Cookie returns the
+			// first name match — a fixture cookie would shadow
+			// the tampered one and mask the guard).
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+				"/oidc/callback?code=sshcheck-code&state="+sshCheckOIDCState, nil)
+
+			for _, c := range tc.cookies {
+				cookie := c
+				//nolint:gosec // G124: test-fixture cookie
+				req.AddCookie(&cookie)
+			}
+
+			rec := httptest.NewRecorder()
+			provider.OIDCCallbackHandler(rec, req)
+
+			assert.Equal(t, tc.wantCode, rec.Code)
+
+			calls := tokenCalls.Load()
+			if tc.wantExchange {
+				assert.Equal(t, int64(1), calls,
+					"a verified state must reach the token endpoint exactly once before the nonce check")
+			} else {
+				assert.Zero(t, calls,
+					"an unverified state must fail closed before the authorization code is exchanged")
+			}
 		})
 	}
 }
