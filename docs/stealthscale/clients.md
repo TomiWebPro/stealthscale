@@ -17,12 +17,14 @@ dial patch), that still works — see
 
 !!! note "A stealth-capable client is required for the data plane"
 
-    The unified `stscale` binary *is* the stealth-capable client: it uses `utls`
-    to shape the ClientHello and speaks VLESS to the coordinator. A stock,
-    unmodified Tailscale client (or anything that dials WireGuard) cannot use the
-    data plane — it must be patched to import `hscontrol/xray`. `stscale up`
-    performs a stealth transport check (validating the server's Reality public
-    key) before joining.
+```
+The unified `stscale` binary *is* the stealth-capable client: it uses `utls`
+to shape the ClientHello and speaks VLESS to the coordinator. A stock,
+unmodified Tailscale client (or anything that dials WireGuard) cannot use the
+data plane — it must be patched to import `hscontrol/xray`. `stscale up`
+performs a stealth transport check (validating the server's Reality public
+key) before joining.
+```
 
 ## Download — Single Binary
 
@@ -47,8 +49,28 @@ goreleaser build --snapshot --clean  # dist/stscale_*/*
 `client/` (`client/patch/direct.go.diff`, `client/example/main.go`) is
 **reference only** — it shows how a `tailscale` fork *could* be patched with
 `xray.DialVLESS` if you prefer `tailscale up` flags. You do not need it.
-`stscale nodes vless <id>` (`cmd/stealthscale/cli/nodes.go:318`) prints the
-`vless://` URI for `stscale up`:
+
+Joining needs no copy/paste: `stscale up --node-id <id>` fetches the
+`vless://` endpoint from the coordinator's Web UI API
+(`GET /web/api/vless/{id}`, `hscontrol/webui/webui.go` `handleVLESS`) and
+dials it — one command on the client, nothing copied between machines:
+
+```bash
+# On the client — one-command join:
+stscale up --coordinator https://ctl.example.com --authkey <key> --node-id 1
+
+# When the coordinator enforces stealth control (xray.stealth.enforce_control),
+# the Web UI API requires an API key (create one with: stscale apikeys create):
+stscale up --coordinator https://ctl.example.com --authkey <key> \
+  --api-key <api-key> --node-id 1
+
+# Coordinator listens on 0.0.0.0: override the non-dialable address:
+stscale up --coordinator https://ctl.example.com --authkey <key> \
+  --node-id 1 --address 10.0.0.5
+```
+
+`stscale nodes vless <id>` (`cmd/stealthscale/cli/nodes.go`) prints the
+same `vless://` URI for manual use or scripting:
 
 ```bash
 stscale nodes vless 1
@@ -72,8 +94,9 @@ Every node must be told three things before it can talk to the coordinator:
 1. Its **node UUID** — the VLESS authentication identity.
 1. Its **VLESS endpoint** — address and port (and TLS mode if enabled).
 
-The UUID and port are derived from the node's ID and never change. You fetch
-them on the coordinator with:
+The UUID and port are derived from the node's ID and never change. `stscale up --node-id <node-id>` fetches them from the coordinator automatically (see
+"Registering a node — unified binary" below); to print them by hand, run on
+the coordinator:
 
 ```shell
 stscale nodes vless <node-id>
@@ -101,15 +124,44 @@ can dial with uTLS+Reality: `dest` (decoy, e.g. `www.cloudflare.com:443`),
 
 !!! note "Listeners start on registration"
 
-    `stscale nodes vless <node-id>` computes the endpoint deterministically
-    for **any** node ID, but the coordinator only runs a VLESS listener for a node
-    once that node has registered. Register the node first, then hand it its
-    endpoint (e.g. `stscale nodes list` to confirm it exists).
+```
+`stscale nodes vless <node-id>` computes the endpoint deterministically
+for **any** node ID, but the coordinator only runs a VLESS listener for a node
+once that node has registered. Register the node first, then hand it its
+endpoint (e.g. `stscale nodes list` to confirm it exists).
+```
 
 ## Registering a node — unified binary (recommended)
 
 With a pre-auth key from the coordinator
 ([create one first](install.md#register-users-and-preauth-keys)):
+
+```shell
+# One-command join — the endpoint is fetched from the coordinator's
+# Web UI API (GET /web/api/vless/{id}), no URI copy/paste:
+stscale up \
+  --coordinator https://ctl.example.com \
+  --authkey <pre-auth-key> \
+  --node-id 1
+
+# When the coordinator enforces stealth control (xray.stealth.enforce_control),
+# the Web UI API requires an API key (create with: stscale apikeys create):
+stscale up \
+  --coordinator https://ctl.example.com \
+  --authkey <pre-auth-key> \
+  --api-key <api-key> \
+  --node-id 1
+
+# Coordinator listens on 0.0.0.0: override the non-dialable address:
+stscale up \
+  --coordinator https://ctl.example.com \
+  --authkey <pre-auth-key> \
+  --node-id 1 \
+  --address 10.0.0.5
+```
+
+Alternatively, paste the URI printed on the coordinator by
+`stscale nodes vless <id>` (use `--one-line` for raw URI output):
 
 ```shell
 stscale up \
@@ -122,7 +174,8 @@ stscale up \
 ```
 
 `stscale up` is the client side of the unified binary (`hscontrol/xray/client.go`
-`DialVLESS`): it dials the node's stealth endpoint (`--vless-uri` / `--endpoint`), authenticates with its UUID,
+`DialVLESS`): it dials the node's stealth endpoint (`--vless-uri` / `--endpoint`,
+or fetched from the coordinator with `--node-id`), authenticates with its UUID,
 and performs a stealth transport check — validating the server via its Reality
 public key over uTLS-shaped TLS with a decoy certificate (`fp=chrome` by default).
 Once two peers have identified each other, **all further transport is VLESS
@@ -136,10 +189,12 @@ both a node and a coordinator (on by default). Point another device at it with
 
 !!! note "Discovery vs stealth"
 
-    Finding a coordinator for the first time may use whatever is necessary
-    (including non-stealth discovery). But once two peers have exchanged
-    identity, all communication is VLESS stealth per
-    [overview.md](overview.md#bootstrap-discovery-and-steady-state-transport).
+```
+Finding a coordinator for the first time may use whatever is necessary
+(including non-stealth discovery). But once two peers have exchanged
+identity, all communication is VLESS stealth per
+[overview.md](overview.md#bootstrap-discovery-and-steady-state-transport).
+```
 
 Subsequent logins are stateless: the node reconnects to the same endpoint
 with the same UUID/port (derived as
@@ -153,9 +208,7 @@ You do **not** need a patched `tailscale`. `stscale` is the client. This
 section is reference if you prefer `tailscale up` flags — see
 `client/README.md` and `client/patch/direct.go.diff` + `client/example/main.go`.
 The patch replaces `control/controlclient` dial with `xray.DialVLESS` + `RealityUClient`
-and adds `--vless-uri` / `TS_VLESS_URI`. The transport (`VLESS + noise +
-HTTP/2`) is identical; only the binary differs (`tailscale up --login-server …
---vless-uri 'vless://…'` vs `stscale up --coordinator … --vless-uri 'vless://…'`).
+and adds `--vless-uri` / `TS_VLESS_URI`. The transport (`VLESS + noise + HTTP/2`) is identical; only the binary differs (`tailscale up --login-server … --vless-uri 'vless://…'` vs `stscale up --coordinator … --vless-uri 'vless://…'`).
 
 ```shell
 # Reference only — not required, stscale is the client
@@ -169,11 +222,11 @@ tailscale up \
 
 - On the server:
 
-    ```shell
-    stscale nodes list
-    ```
+  ```shell
+  stscale nodes list
+  ```
 
-    should show the node as online.
+  should show the node as online.
 
 - The `tailscale status` on the client should report `Connected` to the
   control server, and show peers once a second node joins.
@@ -194,9 +247,9 @@ tailscale up \
 
 ## Troubleshooting
 
-| Symptom                                | Likely cause                                                                                                                   |
+| Symptom | Likely cause |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Connection reset during `tailscale up` | Wrong UUID for this node, or the node ID does not match the listener (the server refuses mismatched UUIDs).                    |
-| Connection timeout                     | The port range is not reachable: check the firewall/NAT and `xray.listen_port` … `xray.max_listen_port`.                       |
-| TLS handshake failure                  | `xray.security: tls` is enabled but the client is configured `security=none` (or vice-versa), or the certificate is untrusted. |
-| Registration succeeds but no peers     | Both nodes must be in the same user/policy and both must be online; check `stscale nodes list`.                                |
+| Connection reset during `tailscale up` | Wrong UUID for this node, or the node ID does not match the listener (the server refuses mismatched UUIDs). |
+| Connection timeout | The port range is not reachable: check the firewall/NAT and `xray.listen_port` … `xray.max_listen_port`. |
+| TLS handshake failure | `xray.security: tls` is enabled but the client is configured `security=none` (or vice-versa), or the certificate is untrusted. |
+| Registration succeeds but no peers | Both nodes must be in the same user/policy and both must be online; check `stscale nodes list`. |

@@ -9,7 +9,7 @@
 
 StealthScale is a fork of [Headscale](https://github.com/juanfont/headscale)
 with a different end goal: **there is no "head" server and no special client.**
-Every device runs the same binary, becomes a *node* in the network, and
+Every device runs the same binary, becomes a _node_ in the network, and
 coordinates with its peers. An always-on coordinate server is encouraged for
 reliability, but **any node can become a coordinate server by default** — there
 is no privileged role. The wire protocol is replaced with VLESS + Reality
@@ -47,7 +47,7 @@ ordinary TLS to a network observer.
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-Every device runs the **same binary**. Each is a *node*. Any node may act as the
+Every device runs the **same binary**. Each is a _node_. Any node may act as the
 coordinator (on by default); the others treat it as the source of truth but still
 coordinate directly with each other. There is no separate "headscale" server.
 
@@ -56,7 +56,7 @@ coordinate directly with each other. There is no separate "headscale" server.
   `sha256("stealthscale-port:<id>")` mapped into the configured range).
 - The UUID/port never change across restarts, enabling static client config.
 - The standard Tailscale **noise** handshake and HTTP/2 machine API run
-  *inside* the authenticated VLESS stream.
+  _inside_ the authenticated VLESS stream.
 
 See [docs/stealthscale/overview.md](docs/stealthscale/overview.md) for the
 full architecture.
@@ -69,7 +69,7 @@ full architecture.
 You need:
 
 - **Server**: this repository (built as `stscale`). It exposes its own management API and VLESS endpoints — not the Headscale/Tailscale API surface.
-- **Client**: the unified `stscale` binary in `up` mode (`stscale up --vless-uri ...`) — see
+- **Client**: the unified `stscale` binary in `up` mode (`stscale up --node-id <id>`, or `--vless-uri ...`) — see
   [docs/stealthscale/clients.md](docs/stealthscale/clients.md). A separate patched Tailscale client is not supported.
 
 ## Quick start
@@ -117,20 +117,19 @@ stscale serve --config /etc/stealthscale/config.yaml
 ```
 
 To join an existing network, point it at a coordinator and (if needed) a
-pre-auth key:
+pre-auth key. The endpoint is fetched from the coordinator — no URI
+copy/paste:
 
 ```shell
 stscale up \
   --coordinator https://ctl.example.com \
   --authkey <pre-auth-key> \
-  --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls'
+  --node-id 1
 ```
 
-Fetch the `vless://` URI for a node on the coordinator:
-
-```shell
-stscale nodes vless <node-id>
-```
+The `vless://` URI for a node can also be printed on the coordinator
+(with `stscale nodes vless <node-id>`) and passed via `--vless-uri` —
+see [docs/stealthscale/clients.md](docs/stealthscale/clients.md).
 
 > **Discovery vs stealth:** finding a coordinator for the first time may use
 > whatever is necessary (including non-stealth discovery). But once two peers
@@ -153,8 +152,8 @@ We treat [headscale-ui](https://github.com/gurucomputing/headscale-ui) and the
 as **design guidelines and improve on them**: the StealthScale UI talks to the
 live control plane, is embedded in the binary, and must expose full write
 operations. The current embedded UI is read-only (see
-[docs/stealthscale/overview.md](docs/stealthscale/overview.md) → *Current
-status*); closing that gap is a core goal.
+[docs/stealthscale/overview.md](docs/stealthscale/overview.md) → _Current
+status_); closing that gap is a core goal.
 
 ## Development
 
@@ -188,7 +187,7 @@ The full docs live in [`docs/`](docs/) (MkDocs):
 BSD-3-Clause for StealthScale-originated code. See [LICENSE](LICENSE).
 
 This project bundles third-party components under their own licences
-(see `LICENSE` → *Third-Party Licenses*):
+(see `LICENSE` → _Third-Party Licenses_):
 
 - `github.com/xtls/reality` — MPL-2.0 (Copyright (c) 2023 RPRX) — XTLS-Reality server.
 - `github.com/XTLS/Xray-core` (reality transport) — MPL-2.0 — reference for the lightweight Reality client port (`hscontrol/xray/reality_client.go`).

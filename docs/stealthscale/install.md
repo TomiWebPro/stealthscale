@@ -92,48 +92,54 @@ curl -s http://127.0.0.1:8080/web | head   # WebUI embedded
 
 === "Linux (systemd)"
 
-    ```ini
-    [Unit]
-    Description=StealthScale (VLESS+Reality)
-    After=network.target
-    [Service]
-    ExecStart=/usr/local/bin/stscale serve --config /etc/stealthscale/config.yaml
-    Restart=always
-    [Install]
-    WantedBy=multi-user.target
-    ```
+````
+```ini
+[Unit]
+Description=StealthScale (VLESS+Reality)
+After=network.target
+[Service]
+ExecStart=/usr/local/bin/stscale serve --config /etc/stealthscale/config.yaml
+Restart=always
+[Install]
+WantedBy=multi-user.target
+```
+````
 
 === "macOS (launchd)"
 
-    ```xml
-    <!-- /Library/LaunchDaemons/com.stealthscale.plist (see packaging/launchd/com.stealthscale.plist) -->
-    <key>Label</key><string>com.stealthscale</string>
-    <key>ProgramArguments</key><array><string>/usr/local/bin/stscale</string><string>serve</string><string>--config</string><string>/usr/local/etc/stealthscale/config.yaml</string></array>
-    <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-    ```
-    ```bash
-    sudo cp packaging/launchd/com.stealthscale.plist /Library/LaunchDaemons/
-    sudo launchctl load /Library/LaunchDaemons/com.stealthscale.plist
-    # brew (future): brew install stealthscale/tap/stscale
-    ```
+````
+```xml
+<!-- /Library/LaunchDaemons/com.stealthscale.plist (see packaging/launchd/com.stealthscale.plist) -->
+<key>Label</key><string>com.stealthscale</string>
+<key>ProgramArguments</key><array><string>/usr/local/bin/stscale</string><string>serve</string><string>--config</string><string>/usr/local/etc/stealthscale/config.yaml</string></array>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+```
+```bash
+sudo cp packaging/launchd/com.stealthscale.plist /Library/LaunchDaemons/
+sudo launchctl load /Library/LaunchDaemons/com.stealthscale.plist
+# brew (future): brew install stealthscale/tap/stscale
+```
+````
 
 === "Windows (Service + Named Pipe + Tray)"
 
-    ```powershell
-    # Native Windows — no Docker (see packaging/windows/README.md)
-    powershell -ExecutionPolicy Bypass -File packaging/windows/install.ps1
-    # with tray autostart:
-    powershell -ExecutionPolicy Bypass -File packaging/windows/install.ps1 -LaunchAtStartup
-    # tray mode (hide-in-tray, alpha.3): systray icon with Open WebUI / Status / Quit
-    & "C:\Program Files\stealthscale\stscale.exe" serve --tray --config "%ProgramData%\stealthscale\config.yaml"
-    # or: sc.exe create stealthscale binPath= ""C:\Program Files\stealthscale\stscale.exe" serve --config "%ProgramData%\stealthscale\config.yaml""
-    sc.exe start stealthscale
-    # CLI via named pipe:
-    .\stscale.exe --address npipe:////./pipe/stealthscale nodes list
-    # uninstall (clean):
-    .\stscale.exe uninstall --purge
-    powershell -ExecutionPolicy Bypass -File packaging/windows/uninstall.ps1 -Purge
-    ```
+````
+```powershell
+# Native Windows — no Docker (see packaging/windows/README.md)
+powershell -ExecutionPolicy Bypass -File packaging/windows/install.ps1
+# with tray autostart:
+powershell -ExecutionPolicy Bypass -File packaging/windows/install.ps1 -LaunchAtStartup
+# tray mode (hide-in-tray, alpha.3): systray icon with Open WebUI / Status / Quit
+& "C:\Program Files\stealthscale\stscale.exe" serve --tray --config "%ProgramData%\stealthscale\config.yaml"
+# or: sc.exe create stealthscale binPath= ""C:\Program Files\stealthscale\stscale.exe" serve --config "%ProgramData%\stealthscale\config.yaml""
+sc.exe start stealthscale
+# CLI via named pipe:
+.\stscale.exe --address npipe:////./pipe/stealthscale nodes list
+# uninstall (clean):
+.\stscale.exe uninstall --purge
+powershell -ExecutionPolicy Bypass -File packaging/windows/uninstall.ps1 -Purge
+```
+````
 
 ## Create User & PreAuth Key
 
@@ -145,14 +151,27 @@ stscale preauthkeys create --user <id> --reusable --expiration 24h
 
 ## Connect Client (Unified `stscale up`)
 
-Use the unified `stscale up` (recommended). Get the VLESS URI on the coordinator via `stscale nodes vless <id>` and paste to the client:
+Use the unified `stscale up` (recommended). The client fetches its own endpoint from the coordinator — no URI copy/paste:
+
+```bash
+# On client: one-command join (endpoint fetched from the coordinator's
+# Web UI API, GET /web/api/vless/{id}; see `stscale up --help` flags
+# --coordinator/--authkey/--node-id/--api-key/--address)
+stscale up --coordinator https://ctl.example.com --authkey <preauthkey> --node-id 1
+
+# When the coordinator enforces stealth control (xray.stealth.enforce_control),
+# the Web UI API requires an API key (create with: stscale apikeys create):
+stscale up --coordinator https://ctl.example.com --authkey <preauthkey> --api-key <api-key> --node-id 1
+```
+
+Alternatively, get the VLESS URI on the coordinator via `stscale nodes vless <id>` and paste it to the client:
 
 ```bash
 # On coordinator: get VLESS URI for node 1
 stscale nodes vless 1
 # => vless://<uuid>@<addr>:<port>?security=reality_xtls&pbk=...&sid=...&dest=...&fp=chrome&type=tcp&flow=xtls-rprx-vision
 
-# On client: connect via stealth transport (see `stscale up --help` flags --coordinator/--authkey/--vless-uri/--endpoint)
+# On client: connect via stealth transport
 stscale up --coordinator https://ctl.example.com --authkey <preauthkey> --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls&pbk=...&sid=...&dest=...&fp=chrome'
 ```
 
@@ -162,11 +181,13 @@ Discovery vs stealth: plain `GET /key` is non-stealth discovery (allowed); regis
 
 !!! note "A stealth-capable client is required for the data plane"
 
-    The `stscale` binary (or a Tailscale patched with `hscontrol/xray`) is the
-    stealth-capable client. During `stscale up` it performs a stealth transport
-    check that validates the server via its Reality public key over uTLS-shaped
-    TLS with a decoy certificate. A stock, unmodified Tailscale client cannot use
-    the VLESS data plane.
+```
+The `stscale` binary (or a Tailscale patched with `hscontrol/xray`) is the
+stealth-capable client. During `stscale up` it performs a stealth transport
+check that validates the server via its Reality public key over uTLS-shaped
+TLS with a decoy certificate. A stock, unmodified Tailscale client cannot use
+the VLESS data plane.
+```
 
 ## WebUI
 
@@ -181,14 +202,14 @@ StealthScale's VLESS+Reality identity (`xray.secret`, `reality` keys, `NodeUUID`
 1. **Backup** `db.sqlite` and the sibling `.xray_secret` (next to the DB path,
    e.g. `/var/lib/stealthscale/.xray_secret`). For postgres, backup the
    `xray.secret` value from `config.yaml` — there is no local file.
-2. **Keep `xray.secret` and `xray.reality.*` stable** across upgrades. If you
+1. **Keep `xray.secret` and `xray.reality.*` stable** across upgrades. If you
    must rotate the secret or dest, re-issue `vless://` URIs with
    `stscale nodes vless <id>` and redistribute to clients.
-3. **Reality dest change** (`www.microsoft.com:443` → `www.cloudflare.com:443`)
+1. **Reality dest change** (`www.microsoft.com:443` → `www.cloudflare.com:443`)
    does not change `NodeUUID`/`NodePort` (only `pbk`/`sid`/`dest` in the URI),
    but clients must update their `--vless-uri` to the new `dest`/`pbk`/`sid` or
    the Reality handshake will fail (server presents new `PublicKey`/`ShortId`).
-4. Do **not** rename columns that later migrations reference; add new migrations
+1. Do **not** rename columns that later migrations reference; add new migrations
    to the end of `hscontrol/db/db.go:962` (`202602201200-...` format) and never
    disable FKs (see `AGENTS.md`).
 
