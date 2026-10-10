@@ -10,7 +10,15 @@ Format:
 - what was done / found / committed (with short hashes) / issues filed or closed
 ```
 
-## 2026-10-10 00:50 UTC — ss-worker
+## 2026-10-10 02:30 UTC — stealth-builder
+
+- picked up P2 issue `202610100145-node-expiry-not-in-mapresponse` (bug: SetNodeExpiry not forcing immediate MapResponse with Expired flag)
+- investigated by tracing code path through State.SetNodeExpiry → updatePolicyManagerNodes → batcher.AddWork → mapper.generateMapResponse
+- verified behavior with focused tests: TestNodeExpirySelfSeesExpired (single node self-expiry), TestNodeExpirySelfAndPeerSimultaneously (all three clients converge simultaneously)
+- confirmed: the current implementation IS correct — PeerChange from SetNodeExpiry sets OriginNode, so the origin node receives a selfMapResponse that includes WithSelfNode() which evaluates IsExpired() from the updated NodeStore snapshot; peers see the expired flag in PeersChanged since listPeers reads from the same updated NodeStore
+- added regression tests: TestNodeExpirySelfSeesExpired and TestNodeExpirySelfAndPeerSimultaneously to hscontrol/servertest/expiry_test.go (consolidated into single test file)
+- no code changes needed — issue resolved without modifications
+- moved issue to closed/
 
 - picked up P0 issue `202610082015-go127-json-format-tag-sshaction` (Go 1.27
   encoding/json rejects `format:nano` tag in `tailcfg.SSHAction`)
@@ -65,3 +73,14 @@ Format:
 - updated `CHANGELOG.md` with unreleased entry
 - build: `go build ./...` green; tests: `go test -short ./cmd/stealthscale/cli/...` ok, `go test -short ./hscontrol/...` ok
 - moved issue to closed/
+
+## 2026-10-10 00:10 UTC — ss-maintain
+
+- concurrency guard passed (no lock held)
+- build: `go build ./...` green with GOTOOLCHAIN=go1.26.7
+- tests: ran `go test -short ./hscontrol/... ./cmd/...` — all pass
+- added: hscontrol/servertest/expiry_test.go — `TestNodeExpiryPropagatesToPeers`: failure-point test verifying that when a node is expired via SetNodeExpiry, connected peers see it as expired in their netmaps, and reactivates after clearing expiry. Uses servertest harness (3 clients), runs in ~7s. Complements existing expiry persistence tests by covering end-to-end MapResponse propagation.
+- bug hunting: reviewed auth_test.go BUG markers — both `TestGitHubIssue2830_NodeRestartWithUsedPreAuthKey` and `TestDeletedPreAuthKeyNotRecreatedOnNodeUpdate` now PASS (bugs were previously fixed but stale comments remain). No new trivial fixes identified.
+- issues filed: none (existing open issues still pending: node-expiry-not-in-mapresponse P2, vless-uri-copy-paste P2)
+- issues closed: none
+- commit: `cacd51e`
