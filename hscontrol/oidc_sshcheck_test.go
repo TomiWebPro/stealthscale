@@ -59,6 +59,29 @@ func signTestIDToken(t *testing.T, key *rsa.PrivateKey, claims map[string]any) s
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
+// sshCheckIdPConfig carries the fake IdP's failure-injection
+// knobs; the zero value serves the happy path.
+type sshCheckIdPConfig struct {
+	// failTokenEndpoint makes the token endpoint reply 500
+	// instead of minting a token: an IdP outage during the
+	// authorization-code exchange.
+	failTokenEndpoint bool
+}
+
+// sshCheckIdPOption customizes the fake IdP served by
+// newSSHCheckCallbackIdP.
+type sshCheckIdPOption func(*sshCheckIdPConfig)
+
+// failTokenEndpoint makes the fake IdP's token endpoint reply
+// 500 (IdP outage during the code exchange) while discovery
+// and JWKS keep working, so a real *oidc.Provider can still
+// be built against it.
+func failTokenEndpoint() sshCheckIdPOption {
+	return func(cfg *sshCheckIdPConfig) {
+		cfg.failTokenEndpoint = true
+	}
+}
+
 // newSSHCheckCallbackIdP starts a fake OpenID Connect provider
 // whose token endpoint mints one fixed RS256 ID token (subject
 // sshCheckIDTokenSub, nonce sshCheckIDTokenNonce). Discovery
@@ -69,8 +92,13 @@ func signTestIDToken(t *testing.T, key *rsa.PrivateKey, claims map[string]any) s
 // return value counts token-endpoint calls, so tests can assert
 // the callback fails closed BEFORE exchanging an authorization
 // code whose CSRF state did not verify.
-func newSSHCheckCallbackIdP(t *testing.T) (string, *atomic.Int64) {
+func newSSHCheckCallbackIdP(t *testing.T, opts ...sshCheckIdPOption) (string, *atomic.Int64) {
 	t.Helper()
+
+	var cfg sshCheckIdPConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -109,6 +137,12 @@ func newSSHCheckCallbackIdP(t *testing.T) (string, *atomic.Int64) {
 
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		tokenCalls.Add(1)
+
+		if cfg.failTokenEndpoint {
+			http.Error(w, "idp unavailable", http.StatusInternalServerError)
+
+			return
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -484,4 +518,47 @@ func TestOIDCCallbackCSRFStateNonceGuards(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOIDCCallbackIdPHiccupFailsClosed drives the full
+// callback against an IdP whose token endpoint is down (500):
+// discovery and JWKS still answer, so only the exchange can
+// fail. The exchange unit itself is pinned by
+// TestGetOauth2TokenIdPHiccupFailsClosed; this test pins the
+// integration through OIDCCallbackHandler — an IdP outage must
+// surface as a user-facing 403, and, critically, must never
+// deliver an SSH check verdict: a parked `tailscale ssh`
+// session stays parked (fail-closed) instead of being silently
+// approved by a half-completed login. The bound state and the
+// owner-matched nodes below would approve the check if the
+// flow completed, so only the IdP outage can stop the callback.
+func TestOIDCCallbackIdPHiccupFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	issuer, tokenCalls := newSSHCheckCallbackIdP(t, failTokenEndpoint())
+
+	app := createTestApp(t)
+	provider := newSSHCheckOIDCProvider(t, app, issuer)
+
+	authID := types.MustAuthID()
+	provider.authCache.Add(sshCheckOIDCState, AuthInfo{AuthID: authID}) //nolint:exhaustruct_v5 // partial literal: only AuthID is set
+
+	user := sshCheckOIDCUser(t, app, issuer)
+
+	src := app.state.CreateNodeForTest(user, "sshcheck-src")
+	dst := app.state.CreateNodeForTest(user, "sshcheck-dst")
+	app.state.PutNodeInStoreForTest(*src)
+	app.state.PutNodeInStoreForTest(*dst)
+
+	authReq := types.NewSSHCheckAuthRequest(src.ID, dst.ID)
+	app.state.SetAuthCacheEntry(authID, authReq)
+
+	rec := httptest.NewRecorder()
+	provider.OIDCCallbackHandler(rec, sshCheckCallbackRequest())
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Empty(t, authReq.WaitForAuth(),
+		"a failed token exchange must not deliver any SSH check verdict")
+	assert.Positive(t, tokenCalls.Load(),
+		"the callback must have attempted the exchange (the oauth2 library may probe the token endpoint twice, retrying the credentials in the other auth style, before giving up)")
 }
