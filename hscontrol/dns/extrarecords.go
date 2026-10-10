@@ -28,6 +28,13 @@ type ExtraRecordsMan struct {
 	updateCh chan []tailcfg.DNSRecord
 	closeCh  chan struct{}
 	hash     [32]byte
+
+	// ctx is cancelled by Close so the deleted-file retry
+	// loop in Run aborts promptly instead of blocking for
+	// the retry policy's full MaxElapsedTime (15 minutes
+	// by default) after the manager has been shut down.
+	ctx    context.Context //nolint:containedctx // cancelled by Close to abort the deleted-file retry
+	cancel context.CancelFunc
 }
 
 // NewExtraRecordsManager creates a new [ExtraRecordsMan] and starts watching the file at the given path.
@@ -62,6 +69,13 @@ func NewExtraRecordsManager(path string) (*ExtraRecordsMan, error) {
 		return nil, fmt.Errorf("reading extra records from path: %w", err)
 	}
 
+	// The deleted-file retry below shares the manager's
+	// lifetime: Close cancels it, so a permanently deleted
+	// extra-records file cannot keep Run retrying (and the
+	// goroutine alive) for the policy's full MaxElapsedTime
+	// after shutdown.
+	ctx, cancel := context.WithCancel(context.Background())
+
 	er := &ExtraRecordsMan{
 		watcher:  watcher,
 		path:     path,
@@ -69,6 +83,8 @@ func NewExtraRecordsManager(path string) (*ExtraRecordsMan, error) {
 		hash:     hash,
 		closeCh:  make(chan struct{}),
 		updateCh: make(chan []tailcfg.DNSRecord),
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 
 	err = watcher.Add(path)
@@ -114,7 +130,7 @@ func (e *ExtraRecordsMan) Run() {
 				// If a file is removed or renamed, fsnotify will lose track of it
 				// and not watch it. We will therefore attempt to re-add it with a backoff.
 			case fsnotify.Remove, fsnotify.Rename:
-				_, err := backoff.Retry(context.Background(), func() (struct{}, error) {
+				_, err := backoff.Retry(e.ctx, func() (struct{}, error) {
 					if _, err := os.Stat(e.path); err != nil { //nolint:noinlineerr
 						return struct{}{}, err
 					}
@@ -148,6 +164,11 @@ func (e *ExtraRecordsMan) Run() {
 }
 
 func (e *ExtraRecordsMan) Close() {
+	// Cancel first so a Run goroutine parked in the
+	// deleted-file backoff retry (e.ctx) aborts promptly
+	// instead of outliving the manager by up to the
+	// retry policy's MaxElapsedTime.
+	e.cancel()
 	e.watcher.Close()
 	close(e.closeCh)
 }

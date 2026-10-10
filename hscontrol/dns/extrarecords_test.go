@@ -162,6 +162,55 @@ func TestNewExtraRecordsManager_ErrorPaths(t *testing.T) {
 	}
 }
 
+// TestExtraRecordsManager_CloseAbortsDeletedFileRetry is a
+// failure-point test for a DNS failure mode: the extra-records
+// file is deleted while the server is running (or the manager
+// is closed while the deleted-file retry is in flight). Run()
+// must abort its backoff retry promptly on Close() — the retry
+// policy's MaxElapsedTime is 15 minutes by default, so without
+// the shared cancel context a permanently deleted file keeps
+// the Run goroutine retrying (and leaking) long after the
+// manager has been shut down.
+func TestExtraRecordsManager_CloseAbortsDeletedFileRetry(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "extra.json")
+
+	require.NoError(t, os.WriteFile(path,
+		[]byte(`[{"name":"a.example.com","type":"A","value":"100.64.0.1"}]`), 0o600))
+
+	manager, err := NewExtraRecordsManager(path)
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+
+	go func() {
+		manager.Run()
+		close(done)
+	}()
+
+	// Delete the watched file. fsnotify delivers a Remove event
+	// and Run() parks in the deleted-file backoff retry (the
+	// file never comes back, so the retry would otherwise run
+	// for the policy's full 15-minute MaxElapsedTime).
+	require.NoError(t, os.Remove(path))
+
+	// Let the Remove event be delivered and the retry start.
+	// Event delivery is fast; the first backoff wait is 500ms,
+	// so after this sleep Run() is parked inside backoff.Retry.
+	time.Sleep(1 * time.Second) //nolint:forbidigo // let the fsnotify Remove event be delivered before Close
+
+	manager.Close()
+
+	select {
+	case <-done:
+		// Close cancelled the retry context and Run returned
+		// promptly.
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return within 5s of Close() while " +
+			"parked in the deleted-file backoff retry")
+	}
+}
+
 // TestExtraRecordsManager_CorruptWriteKeepsStaleRecords is a
 // failure-point test for a DNS failure mode: the extra-records
 // file is corrupted at runtime (operator mid-save, editor crash,
