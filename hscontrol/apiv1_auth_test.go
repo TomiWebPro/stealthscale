@@ -151,6 +151,45 @@ func TestAPIV1AuthApprove(t *testing.T) {
 		res := h.assertParity(t, http.MethodPost, "/api/v1/auth/approve", body)
 		assertStatus(t, res, http.StatusNotFound)
 	})
+
+	// A registration session must not be decided from the API: the
+	// interactive auth flow (the node's auth URL, or POST
+	// /api/v1/auth/register) completes it. A verdict here carries no
+	// node, and the registering client treats an accept without a node
+	// as an expired session and silently restarts its registration.
+	t.Run("registration session refused", func(t *testing.T) {
+		h := newAPIV1Harness(t)
+
+		authID := types.MustAuthID()
+		seedAuthRequest(
+			"alice", authID,
+			key.NewMachine().Public(),
+			key.NewNode().Public(),
+			key.NewDisco().Public(),
+			"regnode",
+		)(t, h.app)
+
+		body := fmt.Appendf(nil, `{"authId":%q}`, authID.String())
+		res := h.callHuma(http.MethodPost, "/api/v1/auth/approve", body)
+		assertStatus(t, res, http.StatusConflict)
+
+		// No verdict was delivered — the session stays pending for the
+		// interactive flow, and the registration can still be completed
+		// via the dedicated endpoint (the old failure mode consumed the
+		// session here, silently restarting the registration).
+		authReq, ok := h.app.state.GetAuthCacheEntry(authID)
+		require.True(t, ok)
+
+		select {
+		case v := <-authReq.WaitForAuth():
+			t.Fatalf("approve must not decide a registration session, got verdict %+v", v)
+		default:
+		}
+
+		regBody := fmt.Appendf(nil, `{"user":"alice","authId":%q}`, authID.String())
+		res = h.callHuma(http.MethodPost, "/api/v1/auth/register", regBody)
+		require.Equal(t, http.StatusOK, res.status)
+	})
 }
 
 func TestAPIV1AuthReject(t *testing.T) {
@@ -183,5 +222,38 @@ func TestAPIV1AuthReject(t *testing.T) {
 		body := fmt.Appendf(nil, `{"authId":%q}`, types.MustAuthID().String())
 		res := h.assertParity(t, http.MethodPost, "/api/v1/auth/reject", body)
 		assertStatus(t, res, http.StatusNotFound)
+	})
+
+	// A registration session must not be decided from the API (see the
+	// approve test above): rejecting it would silently restart the
+	// registration instead of completing it.
+	t.Run("registration session refused", func(t *testing.T) {
+		h := newAPIV1Harness(t)
+
+		authID := types.MustAuthID()
+		seedAuthRequest(
+			"alice", authID,
+			key.NewMachine().Public(),
+			key.NewNode().Public(),
+			key.NewDisco().Public(),
+			"regnode",
+		)(t, h.app)
+
+		body := fmt.Appendf(nil, `{"authId":%q}`, authID.String())
+		res := h.callHuma(http.MethodPost, "/api/v1/auth/reject", body)
+		assertStatus(t, res, http.StatusConflict)
+
+		authReq, ok := h.app.state.GetAuthCacheEntry(authID)
+		require.True(t, ok)
+
+		select {
+		case v := <-authReq.WaitForAuth():
+			t.Fatalf("reject must not decide a registration session, got verdict %+v", v)
+		default:
+		}
+
+		regBody := fmt.Appendf(nil, `{"user":"alice","authId":%q}`, authID.String())
+		res = h.callHuma(http.MethodPost, "/api/v1/auth/register", regBody)
+		require.Equal(t, http.StatusOK, res.status)
 	})
 }

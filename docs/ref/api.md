@@ -58,6 +58,28 @@ StealthScale server at `/api/v1/docs` for details.
         https://stscale.example.com/api/v1/auth/register
     ```
 
+=== "Approve a pending SSH-check session"
+
+    ```console
+    curl -H "Authorization: Bearer <API_KEY>" \
+        --json '{"authId": "<AUTH_ID>"}' \
+        https://stscale.example.com/api/v1/auth/approve
+    ```
+
+=== "Reject a pending SSH-check session"
+
+    ```console
+    curl -H "Authorization: Bearer <API_KEY>" \
+        --json '{"authId": "<AUTH_ID>"}' \
+        https://stscale.example.com/api/v1/auth/reject
+    ```
+
+`auth/approve` and `auth/reject` decide **SSH-check sessions** only.
+Node-registration sessions are refused with `409 Conflict`: complete a
+registration through the node's auth URL (the interactive flow that
+resolves the user identity), or via `auth/register` above once the user
+is known.
+
 ## Remote control
 
 The `stscale` binary can control a StealthScale instance from a remote machine over the HTTP API.

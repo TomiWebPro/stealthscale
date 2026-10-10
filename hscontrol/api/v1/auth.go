@@ -111,11 +111,16 @@ func registerAuth(api huma.API, b Backend) {
 		OperationID: "authApprove",
 		Method:      http.MethodPost,
 		Path:        "/api/v1/auth/approve",
-		Summary:     "Approve a pending auth session",
+		Summary:     "Approve a pending SSH-check auth session",
 		Tags:        []string{"Auth"},
 		Security:    bearerAuth,
 	}, func(ctx context.Context, in *authApproveInput) (*authApproveOutput, error) {
 		authReq, err := pendingAuthRequest(b, in.Body.AuthID)
+		if err != nil {
+			return nil, err
+		}
+
+		err = refuseRegistrationSession(authReq)
 		if err != nil {
 			return nil, err
 		}
@@ -129,11 +134,16 @@ func registerAuth(api huma.API, b Backend) {
 		OperationID: "authReject",
 		Method:      http.MethodPost,
 		Path:        "/api/v1/auth/reject",
-		Summary:     "Reject a pending auth session",
+		Summary:     "Reject a pending SSH-check auth session",
 		Tags:        []string{"Auth"},
 		Security:    bearerAuth,
 	}, func(ctx context.Context, in *authRejectInput) (*authRejectOutput, error) {
 		authReq, err := pendingAuthRequest(b, in.Body.AuthID)
+		if err != nil {
+			return nil, err
+		}
+
+		err = refuseRegistrationSession(authReq)
 		if err != nil {
 			return nil, err
 		}
@@ -160,4 +170,23 @@ func pendingAuthRequest(b Backend, rawID string) (*types.AuthRequest, error) {
 	}
 
 	return authReq, nil
+}
+
+// refuseRegistrationSession guards the decide endpoints (approve,
+// reject) against registration sessions. Those are completed by the
+// interactive auth flow: opening the node's auth URL resolves the user
+// identity and creates the node (State.HandleNodeFromAuthPath), which
+// delivers the verdict carrying the new node. A verdict sent here
+// carries no node, and the registering client treats an accept without
+// a node as an expired session and silently restarts its registration
+// (waitForFollowup) — so refuse instead of breaking the flow. Mirrors
+// the WebUI's handleAuthFinish, which refuses these sessions the same
+// way.
+func refuseRegistrationSession(authReq *types.AuthRequest) error {
+	if authReq.IsRegistration() {
+		return huma.Error409Conflict(
+			"registration sessions are completed via the node's auth URL; approve/reject applies to SSH-check sessions")
+	}
+
+	return nil
 }
