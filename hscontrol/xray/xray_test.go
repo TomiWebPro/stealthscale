@@ -767,3 +767,104 @@ func TestEnsureNodeListenerRebindsOnSecurityVariant(t *testing.T) {
 
 	assert.Same(t, reb, server.listeners[nodeID], "an unchanged endpoint and variant must not rebind")
 }
+
+// TestEnsureNodeListenerRebindsToDerivedOnOverrideClear pins
+// the override lifecycle's clear transition: an operator-applied
+// per-node endpoint override that is cleared (state.SetNodeVLESS
+// with nil → EnsureNodeListener with nil) must rebind the node's
+// listener back to the config-derived endpoint — the overridden
+// port stops accepting and the derived endpoint serves the VLESS
+// handshake again. Without the rebind-back, a cleared override
+// would leave the node stranded on the override port while every
+// read path (GET /web/api/vless/{id}, the node listing) reports
+// the derived endpoint.
+func TestEnsureNodeListenerRebindsToDerivedOnOverrideClear(t *testing.T) {
+	cfg := testXRayConfig()
+	server, err := NewServer(&cfg, func(conn net.Conn) {})
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	defer func() { _ = server.Shutdown(context.Background()) }()
+
+	nodeID := types.NodeID(1005)
+
+	derived, err := server.EnsureNodeListener(ctx, nodeID, nil)
+	require.NoError(t, err)
+
+	// Apply an override on a different port.
+	overridePort := derived.Port + 60
+
+	override := &VLESSConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		ID:       NodeUUID(nodeID, ""),
+		Network:  "tcp",
+		Address:  cfg.ListenAddr,
+		Port:     overridePort,
+		Security: "none",
+	}
+
+	_, err = server.EnsureNodeListener(ctx, nodeID, override)
+	require.NoError(t, err)
+
+	// The overridden port serves the VLESS handshake.
+	overrideDialer := &net.Dialer{Timeout: 2 * time.Second} //nolint:exhaustruct_v5 // test fixture: only fields under test
+
+	overrideConn, err := overrideDialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", cfg.ListenAddr, overridePort))
+	require.NoError(t, err)
+
+	_, err = overrideConn.Write(vlessHeader(t, nodeID))
+	require.NoError(t, err)
+
+	var overrideAck [1]byte
+
+	require.NoError(t, overrideConn.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, err = io.ReadFull(overrideConn, overrideAck[:])
+	require.NoError(t, err, "the overridden endpoint must serve the VLESS handshake")
+
+	overrideConn.Close()
+
+	// Clear the override — the transport re-derives the endpoint
+	// (state.NodeVLESS returns nil after SetNodeVLESS(id, nil)).
+	cleared, err := server.EnsureNodeListener(ctx, nodeID, nil)
+	require.NoError(t, err)
+
+	// The listener moved back to the derived endpoint...
+	reb := server.listeners[nodeID]
+	require.NotNil(t, reb)
+	assert.Equal(t, derived.Port, reb.port, "clearing the override must rebind to the derived port")
+	assert.Equal(t, cfg.ListenAddr, reb.addr)
+	assert.Equal(t, "none", reb.security)
+	assert.Equal(t, derived.Port, cleared.Port)
+
+	// ...the overridden port no longer accepts...
+	refuseDialer := &net.Dialer{Timeout: 250 * time.Millisecond} //nolint:exhaustruct_v5 // test fixture: only fields under test
+
+	_, err = refuseDialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", cfg.ListenAddr, overridePort))
+	require.Error(t, err, "the overridden port must stop accepting after the override is cleared")
+
+	// ...and the derived endpoint serves the VLESS handshake
+	// again.
+	derivedConn, err := overrideDialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", cfg.ListenAddr, derived.Port))
+	require.NoError(t, err)
+
+	defer derivedConn.Close()
+
+	_, err = derivedConn.Write(vlessHeader(t, nodeID))
+	require.NoError(t, err)
+
+	var ack [1]byte
+
+	require.NoError(t, derivedConn.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, err = io.ReadFull(derivedConn, ack[:])
+	require.NoError(t, err, "the derived endpoint must serve the VLESS handshake again after the override is cleared")
+
+	assert.Equal(t, uint8(vlessVersion), ack[0])
+
+	// A matching call after the clear is still a no-op.
+	_, err = server.EnsureNodeListener(ctx, nodeID, nil)
+	require.NoError(t, err)
+
+	assert.Same(t, reb, server.listeners[nodeID], "an unchanged derived endpoint must not rebind")
+}

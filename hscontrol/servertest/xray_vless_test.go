@@ -277,7 +277,15 @@ func TestVLESSNodeEndpointOverrideRebindsListener(t *testing.T) {
 	// the listener is rebound before the apply returns.
 	overridePort := derivedPort + 500
 
-	h := webui.Handler(&types.Config{}, ts.State()) //nolint:exhaustruct_v5 // test fixture: zero config
+	h := webui.Handler(&types.Config{ //nolint:exhaustruct_v5 // test fixture: only the XRay section is under test
+		XRay: types.XRayConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+			Enabled:        true,
+			ListenAddr:     "127.0.0.1",
+			BaseListenPort: xrayTestPortStart,
+			MaxListenPort:  xrayTestPortEnd,
+			Timeout:        30 * time.Second,
+		},
+	}, ts.State())
 
 	ui := httptest.NewServer(h)
 
@@ -342,4 +350,48 @@ func TestVLESSNodeEndpointOverrideRebindsListener(t *testing.T) {
 
 	require.ErrorAs(t, err, &netErr)
 	assert.True(t, netErr.Timeout(), "in-flight connection must keep its deadline across the rebind")
+
+	// Clear the override through the same state method the
+	// Web UI POST delegates to (state.SetNodeVLESS with
+	// nil): the listener must rebind back to the
+	// config-derived endpoint.
+	require.NoError(t, ts.State().SetNodeVLESS(nodeID, nil))
+
+	// The override is gone from the store and the read
+	// path reports the derived endpoint again.
+	require.Nil(t, ts.State().NodeVLESS(nodeID))
+
+	clearedGetReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ui.URL+"/web/api/vless/"+nodeID.String(), nil)
+	require.NoError(t, err)
+
+	clearedGetResp, err := http.DefaultClient.Do(clearedGetReq)
+	require.NoError(t, err)
+
+	defer clearedGetResp.Body.Close()
+
+	var cleared map[string]any
+
+	require.NoError(t, json.NewDecoder(clearedGetResp.Body).Decode(&cleared))
+	assert.InDelta(t, derivedPort, cleared["port"], 0, "a cleared override must report the derived endpoint again")
+	assert.Contains(t, cleared["uri"], fmt.Sprintf("127.0.0.1:%d", derivedPort))
+
+	// The derived endpoint accepts again...
+	reDerived := dialVLESS(t, derivedAddr, nodeID)
+	require.NotNil(t, reDerived)
+
+	// ...and the overridden port no longer accepts.
+	overrideDialer := &net.Dialer{Timeout: 250 * time.Millisecond} //nolint:exhaustruct_v5 // test fixture: only fields under test
+
+	_, err = overrideDialer.DialContext(t.Context(), "tcp", overrideAddr)
+	require.Error(t, err, "the overridden endpoint must stop accepting after the override is cleared")
+
+	// The in-flight connection from before either rebind
+	// keeps its deadline: neither the override nor the
+	// clear tore the stream down.
+	require.NoError(t, inFlight.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
+
+	_, err = inFlight.Read(make([]byte, 1))
+
+	require.ErrorAs(t, err, &netErr)
+	assert.True(t, netErr.Timeout(), "in-flight connection must keep its deadline across the override and the clear rebind")
 }
