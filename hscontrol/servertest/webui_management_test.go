@@ -593,3 +593,79 @@ func TestWebUI_AuthFinishDelegatesToRealState(t *testing.T) {
 	code, _ = doReq(http.MethodPut, "/web/api/auth/"+sshAuthID.String(), map[string]any{})
 	assert.Equal(t, http.StatusMethodNotAllowed, code)
 }
+
+// TestWebUI_DeleteNodeDelegatesToRealState pins the WebUI
+// node-delete endpoint against a real *state.State: the
+// DeleteNode delegation interface must be satisfied (no
+// stub fallback) and the node must actually disappear from
+// the live state. The mock-only coverage
+// (webui_write_test.go TestWebUI_DeleteNode) cannot catch a
+// signature drift in state.State.DeleteNode: the handler
+// type-asserts two DeleteNode shapes and silently answers
+// "deleted" from the stub when neither matches, while the
+// node stays registered.
+//
+// Note: this pins the delegation surface only. Propagation
+// of the returned change to connected clients (the
+// App.Change -> batcher step the API v1/v2 paths perform)
+// is tracked separately — see the WebUI write-propagation
+// issue in issues/open/.
+func TestWebUI_DeleteNodeDelegatesToRealState(t *testing.T) {
+	srv := NewServer(t)
+	defer srv.Close()
+
+	st := srv.State()
+
+	user := srv.CreateUser(t, "webui-del")
+
+	node := srv.CreateRegisteredNode(t, user, "webui-del-node")
+
+	h := webui.Handler(&types.Config{}, st) //nolint:exhaustruct_v5 // test fixture: zero config
+
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	doDelete := func(path string) (int, map[string]any) {
+		req, err := http.NewRequestWithContext(
+			context.Background(), http.MethodDelete, ts.URL+path, nil)
+		require.NoError(t, err)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+
+		defer resp.Body.Close()
+
+		out := map[string]any{}
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+
+		return resp.StatusCode, out
+	}
+
+	nodePath := "/web/api/nodes/" + node.ID().String()
+
+	// DELETE removes the node from the live state.
+	code, out := doDelete(nodePath)
+	require.Equal(t, http.StatusOK, code, out)
+	assert.Equal(t, "deleted", out["status"])
+	assert.Equal(t, node.ID().String(), out["nodeID"])
+
+	_, ok := st.GetNodeByID(node.ID())
+	require.False(t, ok, "deleted node must be gone from the live state")
+
+	// Deleting the same id again -> 404: the removal is real,
+	// not just masked by the response.
+	code, _ = doDelete(nodePath)
+	assert.Equal(t, http.StatusNotFound, code)
+
+	// Unknown node id -> 404.
+	code, _ = doDelete("/web/api/nodes/999999")
+	assert.Equal(t, http.StatusNotFound, code)
+
+	// Missing node id -> 400.
+	code, _ = doDelete("/web/api/nodes/")
+	assert.Equal(t, http.StatusBadRequest, code)
+
+	// Invalid node id -> 400.
+	code, _ = doDelete("/web/api/nodes/abc")
+	assert.Equal(t, http.StatusBadRequest, code)
+}
