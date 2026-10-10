@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## Unreleased — CLI: `stscale nodes vless --one-line` + single-command join flow
+
+- **CLI polish**: added `--one-line` flag to `stscale nodes vless <id>` — outputs only the raw `vless://` URI (no table headers), pipe-friendly for automation. Updated error message in `stscale up` to show a one-command shell example using subshell substitution. Updated docs in `docs/stealthscale/clients.md` and `up --help` examples. Closes issue `202610100145-vless-uri-copy-paste`.
+
 ## 0.0.1-alpha.4 (2026-09-02) — Docker compatibility (full container support)
 
 Docker was the last blocked platform (`kos` disabled since `alpha.1`, `alpha.2`/`alpha.3` were native-only: `No Docker images in this channel`). With Windows tray + clean uninstall proven, `ghcr.io/tomiwebpro/stealthscale` is re-enabled and the entire stack is verified for container deployment — **targeting full compatibility of this program with Docker**.

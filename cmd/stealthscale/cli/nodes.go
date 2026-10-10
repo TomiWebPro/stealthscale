@@ -41,6 +41,7 @@ func init() {
 	nodeCmd.AddCommand(expireNodeCmd)
 
 	nodeVLESSCommand.Flags().String("address", "", "Override xray.listen_addr for the VLESS address in the output URI")
+	nodeVLESSCommand.Flags().Bool("one-line", false, "Output only the VLESS URI (no table, pipe-friendly)")
 	nodeCmd.AddCommand(nodeVLESSCommand)
 
 	renameNodeCmd.Flags().Uint64P("identifier", "i", 0, "Node identifier (ID)")
@@ -332,7 +333,11 @@ var deleteNodeCmd = &cobra.Command{
 var nodeVLESSCommand = &cobra.Command{
 	Use:   "vless",
 	Short: "Show the VLESS endpoint configuration for a node",
-	Args:  cobra.ExactArgs(1),
+	Long: `Show the VLESS endpoint configuration for a node, suitable for
+use with 'stscale up'. Prints a table by default; use --one-line for
+just the URI (pipe-friendly, no headers), or --output json/yaml for
+machine-readable structured output.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		nodeID, err := types.ParseNodeID(args[0])
 		if err != nil {
@@ -369,6 +374,12 @@ var nodeVLESSCommand = &cobra.Command{
 		// Warn when listen_addr is 0.0.0.0 — URI will contain 0.0.0.0 which is not reachable externally.
 		if config.Address == "0.0.0.0" || config.Address == "::" || config.Address == "" {
 			pterm.Warning.Printf("URI contains %q — set xray.listen_addr to public IP/FQDN or use --address override; 0.0.0.0 is not dialable from clients\n", config.Address)
+		}
+
+		// --one-line: emit only the raw vless:// URI, no headers or formatting.
+		if oneLine, _ := cmd.Flags().GetBool("one-line"); oneLine {
+			fmt.Println(config.URI())
+			return nil
 		}
 
 		output := map[string]any{

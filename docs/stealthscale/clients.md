@@ -53,6 +53,10 @@ goreleaser build --snapshot --clean  # dist/stscale_*/*
 ```bash
 stscale nodes vless 1
 # vless://<uuid>@<host>:<port>?security=reality_xtls&pbk=<pubkey>&sid=<sid>&spx=&fp=chrome&dest=www.cloudflare.com%3A443
+
+# For scripting / one-command join, use --one-line for raw URI output:
+vless_uri="$(stscale nodes vless 1 --one-line)"
+stscale up --coordinator https://ctl.example.com --authkey <key> --vless-uri "$vless_uri"
 ```
 
 ## What the client needs
@@ -70,7 +74,7 @@ them on the coordinator with:
 stscale nodes vless <node-id>
 ```
 
-Which prints a table (use `-o json` for machine-readable output):
+Which prints a table (use `--output json`, `--output yaml`, or `--one-line` for machine-readable output):
 
 ```
 Field    | Value

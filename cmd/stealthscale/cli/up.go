@@ -59,9 +59,13 @@ Discovery vs stealth:
   or curl /web/api/derp). See docs/stealthscale/overview.md#bootstrap.
 
 Examples:
-  # Manual: fetch VLESS URI on coordinator, then paste to client
-  stscale nodes vless 1  # on coordinator, prints vless://...
-  stscale up --coordinator https://ctl.example.com --authkey <key> --vless-uri 'vless://<uuid>@<addr>:<port>?security=reality_xtls&pbk=...&sid=...&dest=...&fp=chrome'
+  # Fetch VLESS URI from coordinator, then paste into up
+  stscale nodes vless 1           # on coordinator, prints table with URI column
+  stscale up --coordinator https://ctl.example.com --authkey <key> --vless-uri 'vless://...'
+
+  # One-command join (bash/zsh): fetch URI via subshell
+  stscale up --coordinator https://ctl.example.com --authkey <key> \
+    --vless-uri "$(stscale nodes vless 1 --one-line)"
 
   # Alias endpoint
   stscale up --coordinator https://ctl.example.com --authkey <key> --endpoint 'vless://...'
@@ -83,7 +87,14 @@ Examples:
 		timeout, _ := cmd.Flags().GetDuration("timeout")
 
 		if vlessURI == "" {
-			return fmt.Errorf("--vless-uri (or --endpoint) is required (get it via 'stscale nodes vless <node-id>' on the coordinator)")
+			return fmt.Errorf(
+				"--vless-uri (or --endpoint) is required\n\n"+
+					"Get the URI from the coordinator:\n"+
+					"  stscale nodes vless <node-id>   # prints table; use --one-line for raw URI only\n\n"+
+					"One-command shell example:\n"+
+					"  stscale up --coordinator https://ctl.example.com --authkey <key> \\\n"+
+					"    --vless-uri \"$(stscale --config /etc/stealthscale/config.yaml nodes vless 1 --one-line)\"",
+			)
 		}
 		cfg, err := xray.ParseVLESSURI(vlessURI)
 		if err != nil {
