@@ -161,3 +161,93 @@ func TestNewExtraRecordsManager_ErrorPaths(t *testing.T) {
 			"failed constructors must not leak the fsnotify watcher fd")
 	}
 }
+
+// TestExtraRecordsManager_CorruptWriteKeepsStaleRecords is a
+// failure-point test for a DNS failure mode: the extra-records
+// file is corrupted at runtime (operator mid-save, editor crash,
+// disk full, truncated write). The manager must fail closed —
+// keep serving the last good records rather than blanking DNS
+// for the whole tailnet — and must recover (adopt AND publish
+// the new records) once the file is valid again.
+func TestExtraRecordsManager_CorruptWriteKeepsStaleRecords(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "extra.json")
+
+	require.NoError(t, os.WriteFile(path,
+		[]byte(`[{"name":"a.example.com","type":"A","value":"100.64.0.1"}]`), 0o600))
+
+	manager, err := NewExtraRecordsManager(path)
+	require.NoError(t, err)
+
+	defer manager.Close()
+
+	recordNames := func() []string {
+		all := manager.Records()
+
+		names := make([]string, 0, len(all))
+		for _, r := range all {
+			names = append(names, r.Name)
+		}
+
+		return names
+	}
+
+	require.Equal(t, []string{"a.example.com"}, recordNames())
+
+	// A corrupt write must not blank the served records:
+	// updateRecords fails closed on the read error and keeps
+	// the last good set.
+	for _, bad := range []string{
+		`[{"name":"b.example.com","type":"A","value":"100.64.0.2`, // truncated
+		`{"not":"an array"}`, // wrong shape
+	} {
+		require.NoError(t, os.WriteFile(path, []byte(bad), 0o600))
+
+		done := make(chan struct{})
+
+		go func() {
+			manager.updateRecords()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("updateRecords hung on a corrupt write")
+		}
+
+		assert.Equal(t, []string{"a.example.com"}, recordNames(),
+			"corrupt write must keep serving the last good records")
+	}
+
+	// Recovery: once the file is valid again the new records must
+	// be adopted AND published on UpdateCh (the mapper's broadcast
+	// path), not just swapped internally.
+	require.NoError(t, os.WriteFile(path,
+		[]byte(`[{"name":"c.example.com","type":"A","value":"100.64.0.3"}]`), 0o600))
+
+	published := make(chan []tailcfg.DNSRecord, 1)
+
+	go func() {
+		select {
+		case recs := <-manager.UpdateCh():
+			published <- recs
+		case <-time.After(2 * time.Second):
+			close(published)
+		}
+	}()
+
+	manager.updateRecords()
+
+	require.Equal(t, []string{"c.example.com"}, recordNames())
+
+	select {
+	case recs := <-published:
+		require.Len(t, recs, 1)
+		require.Equal(t, "c.example.com", recs[0].Name)
+	case <-time.After(2 * time.Second):
+		t.Fatal("recovery update was not published on UpdateCh")
+	}
+}
