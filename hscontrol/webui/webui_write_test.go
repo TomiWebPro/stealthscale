@@ -44,6 +44,17 @@ type writeMockState struct {
 	vlessOverride   map[types.NodeID]*xray.VLESSConfig
 	electionMode    types.ElectionMode
 	electionPrimary types.NodeID
+
+	// Failure injection: when set, the matching delegated
+	// write returns the error instead of succeeding, so
+	// tests can pin the handler's error path (error
+	// status, no change broadcast).
+	failCreateUser error
+	failDeleteNode error
+	failExpire     error
+	failRename     error
+	failTags       error
+	failRoutes     error
 }
 
 func newWriteMock() *writeMockState {
@@ -58,27 +69,67 @@ func newWriteMock() *writeMockState {
 }
 
 func (m *writeMockState) SetNodeExpiry(nodeID types.NodeID, expiry *time.Time) (types.NodeView, change.Change, error) {
+	if m.failExpire != nil {
+		return types.NodeView{}, change.Change{}, m.failExpire //nolint:exhaustruct_v5 // test fixture: only fields under test
+	}
+
 	m.expirySet[nodeID] = expiry
 
 	return types.NodeView{}, change.Change{}, nil //nolint:exhaustruct_v5 // test fixture: only fields under test
 }
 
 func (m *writeMockState) RenameNode(nodeID types.NodeID, name string) (types.NodeView, change.Change, error) {
+	if m.failRename != nil {
+		return types.NodeView{}, change.Change{}, m.failRename //nolint:exhaustruct_v5 // test fixture: only fields under test
+	}
+
 	m.renamed[nodeID] = name
 
 	return types.NodeView{}, change.Change{}, nil //nolint:exhaustruct_v5 // test fixture: only fields under test
 }
 
 func (m *writeMockState) SetNodeTags(nodeID types.NodeID, tags []string) (types.NodeView, change.Change, error) {
+	if m.failTags != nil {
+		return types.NodeView{}, change.Change{}, m.failTags //nolint:exhaustruct_v5 // test fixture: only fields under test
+	}
+
 	m.tagsSet[nodeID] = tags
 
 	return types.NodeView{}, change.Change{}, nil //nolint:exhaustruct_v5 // test fixture: only fields under test
 }
 
 func (m *writeMockState) SetApprovedRoutes(nodeID types.NodeID, routes []netip.Prefix) (types.NodeView, change.Change, error) {
+	if m.failRoutes != nil {
+		return types.NodeView{}, change.Change{}, m.failRoutes //nolint:exhaustruct_v5 // test fixture: only fields under test
+	}
+
 	m.routesSet[nodeID] = routes
 
 	return types.NodeView{}, change.Change{}, nil //nolint:exhaustruct_v5 // test fixture: only fields under test
+}
+
+// CreateUser records a created user (the production
+// *state.State implements it; the mock mirrors the
+// failure-injection contract of the other writes).
+func (m *writeMockState) CreateUser(u types.User) (*types.User, change.Change, error) {
+	if m.failCreateUser != nil {
+		return nil, change.Change{}, m.failCreateUser //nolint:exhaustruct_v5 // test fixture: only fields under test
+	}
+
+	user := u
+
+	return &user, change.Change{}, nil //nolint:exhaustruct_v5 // test fixture: only fields under test
+}
+
+// DeleteNode records a deleted node (the production
+// *state.State implements the NodeView shape that also
+// returns the change to broadcast).
+func (m *writeMockState) DeleteNode(node types.NodeView) (change.Change, error) {
+	if m.failDeleteNode != nil {
+		return change.Change{}, m.failDeleteNode //nolint:exhaustruct_v5 // test fixture: only fields under test
+	}
+
+	return change.Change{}, nil //nolint:exhaustruct_v5 // test fixture: only fields under test
 }
 
 func (m *writeMockState) GetPreAuthKeyByID(id uint64) (*types.PreAuthKey, error) {
@@ -1130,4 +1181,158 @@ func TestWebUI_ElectionMode(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&stubOut))
 	resp.Body.Close()
 	assert.Contains(t, stubOut["status"], "stub")
+}
+
+// TestWebUI_WriteFailureDoesNotPropagateChange pins the
+// failure mode of the Web UI change sink: a delegated
+// state write that fails must answer with an error status
+// and must NOT broadcast a change to the sink. A phantom
+// broadcast would tell every connected client the write
+// happened — the mapper batcher would push a netmap
+// update for a change that never landed in the NodeStore,
+// so a failed delete could drop a live peer from clients,
+// a failed rename could rename a peer that was never
+// renamed, and a failed user creation could trigger a
+// policy refresh for a user that does not exist. The
+// propagation guard (propagateChange behind the write's
+// error check) has no happy-path coverage gap — the
+// success path is pinned in hscontrol/servertest — but
+// nothing pinned the error side of each call site.
+func TestWebUI_WriteFailureDoesNotPropagateChange(t *testing.T) {
+	cfg := testConfig()
+
+	st := newWriteMock()
+
+	st.nodes = []types.NodeView{
+		(&types.Node{ID: types.NodeID(1), Hostname: "node-one", GivenName: "node-one"}).View(), //nolint:exhaustruct_v5 // test fixture: only fields under test
+	}
+	st.users = []types.User{{Name: "alice"}} //nolint:exhaustruct_v5 // test fixture: only fields under test
+
+	var broadcasts int
+
+	sink := func(...change.Change) { broadcasts++ }
+
+	h := Handler(cfg, st, sink)
+	srv := httptest.NewServer(h)
+
+	defer srv.Close()
+
+	failing := []struct {
+		name   string
+		inject func(err error)
+		method string
+		path   string
+		body   any
+		want   int
+	}{
+		{
+			name:   "create user",
+			inject: func(err error) { st.failCreateUser = err },
+			method: http.MethodPost,
+			path:   "/web/api/users",
+			body:   map[string]string{"name": "bob", "email": "bob@example.com"},
+			want:   http.StatusInternalServerError,
+		},
+		{
+			name:   "delete node",
+			inject: func(err error) { st.failDeleteNode = err },
+			method: http.MethodDelete,
+			path:   "/web/api/nodes/1",
+			body:   nil,
+			want:   http.StatusInternalServerError,
+		},
+		{
+			name:   "expire",
+			inject: func(err error) { st.failExpire = err },
+			method: http.MethodPost,
+			path:   "/web/api/nodes/1/expire",
+			body:   map[string]string{"expiry": "2030-01-01T00:00:00Z"},
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "rename",
+			inject: func(err error) { st.failRename = err },
+			method: http.MethodPost,
+			path:   "/web/api/nodes/1/rename",
+			body:   map[string]string{"name": "renamed"},
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "tags",
+			inject: func(err error) { st.failTags = err },
+			method: http.MethodPost,
+			path:   "/web/api/nodes/1/tags",
+			body:   map[string]any{"tags": []string{"tag:server"}},
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "routes",
+			inject: func(err error) { st.failRoutes = err },
+			method: http.MethodPost,
+			path:   "/web/api/nodes/1/routes",
+			body:   map[string]any{"routes": []string{"10.0.0.0/24"}},
+			want:   http.StatusBadRequest,
+		},
+	}
+
+	for _, tc := range failing {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.inject(assert.AnError)
+
+			defer tc.inject(nil)
+
+			var resp *http.Response
+
+			if tc.method == http.MethodDelete {
+				req, err := http.NewRequestWithContext(context.Background(), tc.method, srv.URL+tc.path, nil)
+				require.NoError(t, err)
+
+				var doErr error
+
+				resp, doErr = http.DefaultClient.Do(req)
+				require.NoError(t, doErr)
+			} else {
+				resp = doJSON(t, tc.method, srv.URL+tc.path, tc.body)
+			}
+
+			defer resp.Body.Close()
+
+			require.Equal(t, tc.want, resp.StatusCode, "a failed write must surface as an error status")
+			assert.Equal(t, 0, broadcasts, "a failed write must not broadcast a change to connected clients")
+		})
+	}
+
+	// Control: with the failures cleared the same writes
+	// succeed and broadcast exactly once each — the sink
+	// counts every propagation, so a dropped broadcast on
+	// the happy path fails this count as well.
+	resp := doJSON(t, http.MethodPost, srv.URL+"/web/api/nodes/1/expire", map[string]string{"expiry": "2030-01-01T00:00:00Z"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/nodes/1/rename", map[string]string{"name": "renamed"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/nodes/1/tags", map[string]any{"tags": []string{"tag:server"}})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/nodes/1/routes", map[string]any{"routes": []string{"10.0.0.0/24"}})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/users", map[string]string{"name": "bob", "email": "bob@example.com"})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp.Body.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, srv.URL+"/web/api/nodes/1", nil)
+	require.NoError(t, err)
+
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	assert.Equal(t, 6, broadcasts, "each successful write must broadcast its change exactly once")
 }
