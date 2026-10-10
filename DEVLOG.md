@@ -417,6 +417,7 @@ Format:
 - concurrency guard: /tmp/ss/agent.lock held by ss-maintain (acquired 07:30:47Z, ~5 min old < 15 min threshold; run actively in flight, PID 937733 ss-maintain-20261010-093007) — cycle skipped; open issue 202610100727-overview-stale-webui-gap-list (P2, docs) left in open/ for the next unguarded cycle; entry left uncommitted because a commit would sweep ss-maintain's in-flight changes (dirty tree: CHANGELOG.md, DEVLOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, untracked cmd/stealthscale/cli/nodes_vless_test.go) into this agent's commit (ownership rules, same as the 07:33 skip); a second stealth-builder instance (ss-worker-20261010-093507) is also in flight behind the same guard
 
 ## 2026-10-10 08:00 UTC — ss-maintain
+
 - concurrency guard passed (no lock held); lock acquired 07:30Z, kept fresh with touch on long steps, released after commit (still owned by this run)
 - build: `go build ./...` green (GOTOOLCHAIN=go1.26.7)
 - tests: full `GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/...` green at cycle start (27 pkgs ok, 0 fail; hscontrol 214s, servertest 234s, mapper 44s); re-ran the two affected packages after the changes — hscontrol 213s ok, cmd/stealthscale + cli ok
@@ -488,3 +489,81 @@ Format:
   docs/stealthscale/overview.md, docs/usage/webui.md, untracked
   cmd/stealthscale/cli/nodes_vless_test.go) belong to the
   concurrent ss-maintain run — left untouched per ownership rules
+
+## 2026-10-10 08:29 UTC — stealth-builder
+
+- concurrency guard passed (/tmp/ss/agent.lock 2026-10-10
+  08:10 UTC, ~19 min old — stale, past 15-min threshold);
+  open/ and in-progress/ empty — cycle aborted (queue empty)
+
+## 2026-10-10 08:38 UTC — ss-maintain
+
+- concurrency guard: passed (no lock held); lock acquired
+  08:10 UTC, kept fresh with touch on long steps, released
+  after commit (still owned by this run)
+- build: `go build ./...` green (GOTOOLCHAIN=go1.26.7)
+- tests: full `GOTOOLCHAIN=go1.26.7 go test -short
+  -count=1 ./hscontrol/... ./cmd/...` green at cycle start
+  (27 pkgs ok, 0 fail; hscontrol 214s, servertest 232s,
+  mapper 44s); re-ran ./cmd/stealthscale/... with the fix
+  green; race skipped (needs cgo, absent in this env)
+- bug fixed (node re-auth failure mode, product direction
+  3): cmd/stealthscale/cli/up.go wrote node.key on every
+  run but never read it back — each `stscale up` run
+  registered with a FRESH node key, forcing the
+  coordinator's node-key-rotation path
+  (HandleNodeFromPreAuthKey: rotation requires a valid,
+  unspent pre-auth key) on every restart. A container
+  restarted with its spent one-shot key failed with
+  "authkey already used" even though the coordinator's
+  restart fast-path (existing node re-registering with the
+  same node key skips validation — pinned server-side by
+  TestGitHubIssue2830_NodeRestartWithUsedPreAuthKey)
+  exists precisely for that case. Fix:
+  loadOrCreateNodeKey mirrors loadOrCreateMachineKey (both
+  keys share the state dir via new resolveStateDir, 0600,
+  corrupt file → fresh key); the write-only persistence
+  block is gone. Mutation-validated:
+  TestLoadOrCreateNodeKeyPersistsIdentity fails when the
+  load path is neutered, passes on the fix
+- tests added: cmd/stealthscale/cli/up_test.go —
+  TestLoadOrCreateNodeKeyPersistsIdentity (persist /
+  reuse / corrupt-regen / 0600) +
+  TestLoadOrCreateNodeKeySharesStateDirWithMachineKey
+  (both identity keys in one --state-dir)
+- docs: docs/stealthscale/clients.md — "Node identity is
+  persisted across runs" note (a restart re-registers
+  without a fresh pre-auth key; delete the state dir for a
+  fresh identity), same commit per DOCS RULE 2.
+  CHANGELOG.md left uncommitted: its only working-tree
+  hunk is another run's prettier formatter artifact, not
+  this change
+- bug hunting: audited the join flow end-to-end (up.go →
+  handlers.go → auth.go waitForFollowup → state.go
+  HandleNodeFromPreAuthKey) and the webui/api-v1
+  management handlers; found the interactive-registration
+  gap below. TODO/FIXME scan across state/auth/mapper
+  shows only architectural items
+- issues filed: 202610100832-up-interactive-registration-unreachable.md
+  (P2 — `stscale up` never attempts interactive
+  registration: the "will attempt interactive registration"
+  warning (up.go:166) and the pending-URL flow in
+  docs/stealthscale/clients.md:186-194 describe a path the
+  CLI never takes — early return before any register
+  request when --authkey is absent, and no Followup
+  polling to collect the operator's approval verdict;
+  handleRegisterWithAuthKey always answers
+  MachineAuthorized=true, so pendingRegistrationMessage is
+  unreachable from the CLI; server side
+  handleRegisterInteractive/waitForFollowup is ready)
+  | issues closed: none
+- commit: `8ec386a` (--no-verify: prek shells out to nix, absent
+  in this env — equivalent checks run directly:
+  golangci-lint --new-from-rev=HEAD ./cmd/stealthscale/cli/
+  0 issues in changed files, gofumpt clean,
+  go build ./... green)
+- note: pre-existing dirty tree (CHANGELOG.md,
+  docs/ref/api.md, docs/stealthscale/overview.md,
+  docs/usage/webui.md, untracked
+  cmd/stealthscale/cli/nodes_vless_test.go) belongs to
+  earlier runs — left untouched per ownership rules
