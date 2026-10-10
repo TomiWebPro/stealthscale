@@ -381,3 +381,90 @@ func TestNodeExpirySelfAndPeerSimultaneously(t *testing.T) {
 		}
 	}, 5*time.Second, 200*time.Millisecond)
 }
+
+// TestExpiredNodeRecoveryViaPreAuthKey verifies that when an expired user-owned
+// node re-registers using its pre-auth key, the server forces validation of the
+// key (via the isExpired flag in HandleNodeFromPreAuthKey), then proceeds with
+// registration — restoring the node to active state. This is a critical failure-
+// point: after admin-set expiry, a one-shot key would fail ("already used"),
+// but a reusable key must succeed and clear the expired status.
+//
+// This exercises the code path at state/state.go:2526-2528 (isExpired check)
+// and the subsequent update block that resets Expiry from the client request.
+func TestExpiredNodeRecoveryViaPreAuthKey(t *testing.T) {
+	t.Parallel()
+
+	h := servertest.NewHarness(t, 2) // node + peer for mesh verification
+
+	st := h.Server.State()
+	nodeClient := h.Client(0)      // will be expired
+	peerClient := h.Client(1)      // observes recovery
+
+	// Step 1: Confirm clean start — mesh formed, not expired.
+	h.WaitForMeshComplete(t, 5*time.Second)
+	assert.False(t, nodeClient.Netmap().SelfNode.Expired(),
+		"node should not be expired before admin intervention")
+
+	nodeID := types.NodeID(nodeClient.Netmap().SelfNode.ID()) //nolint:gosec
+
+	// Step 2: Admin expires the node via SetNodeExpiry.
+	expiredAt := time.Now().Add(-5 * time.Minute)
+	_, _, err := st.SetNodeExpiry(nodeID, &expiredAt)
+	require.NoError(t, err)
+
+	// Step 3: Verify the node sees itself as expired via MapRequest.
+	ctx := context.Background()
+	require.NoError(t, nodeClient.RestartPoll(ctx))
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		nm := nodeClient.Netmap()
+		assert.NotNil(c, nm, "netmap should arrive after poll restart")
+		assert.True(c, nm.SelfNode.Expired(),
+			"admin-expired node must see Expired=true in netmap")
+	}, 5*time.Second, 200*time.Millisecond)
+
+	// Step 4: Peer should see the node as expired (may need map refresh).
+	if peerNode, found := findPeerByID(peerClient.Netmap(), tailcfg.NodeID(nodeID)); found {
+		assert.True(t, peerNode.Expired(),
+			"peer should see expired node")
+	} else {
+		t.Log("peer has not yet seen expired node; propagation pending")
+	}
+
+	// Step 5: Node attempts to recover by disconnecting, then re-registering
+	// with its pre-auth key. We must tear down the existing poll before
+	// ReloginAndPoll so the Tailscale control client isn't holding two
+	// mapSessions simultaneously.
+	nodeClient.Disconnect(t)
+
+	reloginCtx, reloginCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer reloginCancel()
+
+	err = nodeClient.ReloginAndPoll(reloginCtx)
+	require.NoError(t, err, "re-login with pre-auth key must succeed after manual expiry")
+
+	// Step 6: Verify the node is no longer expired.
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		nm := nodeClient.Netmap()
+		if nm == nil {
+			c.FailNow()
+			return
+		}
+		assert.False(c, nm.SelfNode.Expired(),
+			"re-registered node must NOT be expired after auth-key recovery")
+	}, 5*time.Second, 200*time.Millisecond)
+
+	// Step 7: Peer must also see the node as active again.
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		nm := peerClient.Netmap()
+		if nm == nil {
+			c.FailNow()
+			return
+		}
+		p0, ok := findPeerByID(nm, tailcfg.NodeID(nodeID))
+		assert.True(c, ok, "peer should still have recovered node in netmap")
+		if ok {
+			assert.False(c, p0.Expired(),
+				"peer must see recovered node as active")
+		}
+	}, 5*time.Second, 200*time.Millisecond)
+}
