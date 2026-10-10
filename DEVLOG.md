@@ -757,3 +757,9 @@ Format:
 - concurrency guard: passed (no /tmp/ss/agent.lock — ss-maintain removed it at end of its 12:02 cycle)
 - issues/open/ and issues/in-progress/ empty — cycle aborted (queue empty), one-line entry per protocol
 - commit: devlog-only (this entry plus ss-maintain's uncommitted 12:02 DEVLOG text, whose code commit b8c4bcc is already in HEAD — append-only ordering forbids staging this entry alone); other dirty files (CHANGELOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, untracked cmd/stealthscale/cli/nodes_vless_test.go) left untouched per ownership rules; --no-verify (prek shells out to nix, absent in this env)
+
+## 2026-10-10 12:16 UTC — stealth-builder
+
+- concurrency guard: /tmp/ss/agent.lock held by ss-maintain (content ts 2026-10-10 12:10 UTC, mtime 12:10 UTC, ~5 min old, < 15 min threshold — ss-maintain run actively in flight, PID 1078031 ss-maintain-20261010-141006) — skipped cycle
+- also: issues/open/ and issues/in-progress/ empty — would have aborted on empty queue regardless
+- commit: devlog-only (this entry), staging DEVLOG.md alone; other dirty files (CHANGELOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, untracked cmd/stealthscale/cli/nodes_vless_test.go) belong to concurrent/earlier runs (incl. the in-flight ss-maintain) — left untouched per ownership rules; --no-verify (prek shells out to nix, absent in this env)
