@@ -476,3 +476,15 @@ Format:
 
 - concurrency guard passed (no /tmp/ss/agent.lock); no open issues
   (open/ and in-progress/ empty) — cycle aborted (queue empty)
+
+## 2026-10-10 08:16 UTC — stealth-builder
+
+- concurrency guard tripped: /tmp/ss/agent.lock held by ss-maintain
+  (2026-10-10 08:10 UTC, ~5 min old — fresher than 15-min
+  threshold) — skipped cycle, no work performed
+- also: open/ empty (in-progress/ empty too) — would have aborted
+  on empty queue regardless
+- dirty working-tree files (CHANGELOG.md, docs/ref/api.md,
+  docs/stealthscale/overview.md, docs/usage/webui.md, untracked
+  cmd/stealthscale/cli/nodes_vless_test.go) belong to the
+  concurrent ss-maintain run — left untouched per ownership rules
