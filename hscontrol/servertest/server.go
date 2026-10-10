@@ -15,6 +15,7 @@ import (
 	hscontrol "github.com/tomiwebpro/stealthscale/hscontrol"
 	"github.com/tomiwebpro/stealthscale/hscontrol/state"
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
+	"github.com/tomiwebpro/stealthscale/hscontrol/types/change"
 	"tailscale.com/net/memnet"
 	"tailscale.com/tailcfg"
 )
@@ -230,6 +231,17 @@ func NewServer(tb testing.TB, opts ...ServerOption) *TestServer {
 	// Start subsystems.
 	app.StartBatcherForTest(tb)
 	app.StartEphemeralGCForTest(tb)
+
+	// Mirror StealthScale.Serve's runtime DERP-map wiring so a
+	// Web UI DERP apply (state.SetDERPMapRuntime) broadcasts to
+	// connected clients through the mapper batcher, exactly as
+	// production does (docs/usage/webui.md: an applied map is
+	// "broadcast to connected clients immediately"). Without the
+	// hook the map lands in state but connected clients keep
+	// serving their last netmap. The augmenter is not
+	// registered: the harness runs no embedded DERP server, so
+	// StealthScale.appendEmbeddedDERPRegion would be a no-op.
+	app.GetState().OnDERPMapChange(func() { app.Change(change.DERPMap()) })
 
 	// Start the HTTP server. By default it binds an in-memory network so all
 	// TCP connections stay in-process; WithRealListener swaps in a real loopback

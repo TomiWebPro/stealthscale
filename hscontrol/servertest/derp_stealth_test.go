@@ -4,13 +4,121 @@
 package servertest
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tomiwebpro/stealthscale/hscontrol/derp"
 	"github.com/tomiwebpro/stealthscale/hscontrol/stealth"
+	"github.com/tomiwebpro/stealthscale/hscontrol/webui"
 )
+
+// TestDERPRuntimeApplyReachesConnectedClient pins the
+// operator flow promised by docs/usage/webui.md: a DERP
+// map applied via POST /web/api/derp is broadcast to
+// connected clients immediately. The Web UI surface
+// delegates to state.SetDERPMapRuntime; the state's
+// OnDERPMapChange hook (registered by StealthScale.Serve
+// and mirrored by servertest.NewServer) pushes a DERPMap
+// change through the mapper batcher, so already-connected
+// clients receive the new map on their live long-poll —
+// no reconnect, no poll restart, no waiting for the next
+// periodic map response.
+//
+// Failure mode guarded: the store updates but the
+// broadcast is missing (e.g. the harness or a future
+// entry point forgets the hook) — connected clients keep
+// serving the stale netmap while the state and the Web
+// UI report the new map.
+func TestDERPRuntimeApplyReachesConnectedClient(t *testing.T) {
+	t.Parallel()
+
+	h := NewHarness(t, 2)
+
+	st := h.Server.State()
+
+	// Baseline: the harness seed map (region 900) is
+	// live in both connected clients' netmaps.
+	for _, tc := range h.Clients() {
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			nm := tc.Netmap()
+			require.NotNil(c, nm)
+			require.NotNil(c, nm.DERPMap)
+			assert.Contains(c, nm.DERPMap.Regions, 900)
+		}, 5*time.Second, 50*time.Millisecond, "client should see the seed DERP map")
+	}
+
+	// The operator applies a new DERP map through the
+	// Web UI surface — the real handler against the real
+	// state, the same delegation path as production.
+	wh := webui.Handler(h.Server.Cfg, st)
+
+	ts := httptest.NewServer(wh)
+	defer ts.Close()
+
+	applied := map[string]any{
+		"derpMap": map[string]any{
+			"regions": map[string]any{
+				"901": map[string]any{
+					"regionID":   901,
+					"regionCode": "rt",
+					"regionName": "Runtime Applied",
+					"nodes": []any{
+						map[string]any{
+							"name":     "rt0",
+							"regionID": 901,
+							"hostName": "127.0.0.1",
+							"ipv4":     "127.0.0.1",
+							"derpPort": -1,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	body, err := json.Marshal(applied)
+	require.NoError(t, err)
+
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		ts.URL+"/web/api/derp",
+		bytes.NewReader(body),
+	)
+	require.NoError(t, err)
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode, "runtime DERP apply must succeed")
+	require.True(t, st.DERPMapIsRuntime(), "the applied map must be marked operator-applied")
+
+	// The broadcast must reach every connected client:
+	// both netmaps converge to the applied map (region
+	// 901 present, seed region 900 gone) with no
+	// reconnect or poll restart.
+	for _, tc := range h.Clients() {
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			nm := tc.Netmap()
+			require.NotNil(c, nm)
+			require.NotNil(c, nm.DERPMap)
+			assert.Contains(c, nm.DERPMap.Regions, 901)
+			assert.NotContains(c, nm.DERPMap.Regions, 900)
+		}, 5*time.Second, 50*time.Millisecond, "connected client must receive the applied DERP map")
+	}
+}
 
 // TestDERPFailClosedViaStealth verifies that DERP is fail-closed when Reality
 // is not satisfied, and is offered when it is. This is the servertest counterpart
