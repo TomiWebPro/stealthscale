@@ -383,3 +383,81 @@ func TestWebUI_ElectionDelegatesToRealState(t *testing.T) {
 	code, _ = doReq(http.MethodPut, "/web/api/election", map[string]any{})
 	assert.Equal(t, http.StatusMethodNotAllowed, code)
 }
+
+// TestWebUI_DERPRuntimeApplyDelegatesToRealState pins the
+// runtime DERP map apply against a real *state.State: the
+// POST must delegate to SetDERPMapRuntime (no stub
+// fallback), the map must land in the live state, the
+// map must be reported as operator-applied (runtime) so
+// the config-derived auto-updater leaves it alone, and
+// GET must report the same provenance.
+func TestWebUI_DERPRuntimeApplyDelegatesToRealState(t *testing.T) {
+	srv := NewServer(t)
+	defer srv.Close()
+
+	st := srv.State()
+
+	h := webui.Handler(&types.Config{}, st) //nolint:exhaustruct_v5 // test fixture: zero config
+
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	doReq := func(method, path string, body any) (int, map[string]any) {
+		var rdr *bytes.Reader
+
+		if body != nil {
+			b, err := json.Marshal(body)
+			require.NoError(t, err)
+
+			rdr = bytes.NewReader(b)
+		} else {
+			rdr = bytes.NewReader(nil)
+		}
+
+		req, err := http.NewRequestWithContext(context.Background(), method, ts.URL+path, rdr)
+		require.NoError(t, err)
+
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+
+		defer resp.Body.Close()
+
+		out := map[string]any{}
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+
+		return resp.StatusCode, out
+	}
+
+	region := map[string]any{
+		"regionID": 910,
+		"nodes": []any{
+			map[string]any{"name": "910a", "regionID": 910, "hostName": "derp910.example.com"},
+		},
+	}
+
+	// Apply a runtime map: the delegation must reach the
+	// real state (no stub) and the map must land live.
+	code, out := doReq(http.MethodPost, "/web/api/derp", map[string]any{"derpMap": map[string]any{"regions": map[string]any{"910": region}}})
+	require.Equal(t, http.StatusOK, code, out)
+	assert.NotContains(t, out["status"], "stub")
+	assert.Equal(t, true, out["runtime"])
+
+	require.True(t, st.DERPMapIsRuntime(), "an operator-applied map must be reported as runtime")
+
+	regions := st.DERPMap().AsStruct().Regions
+	require.Len(t, regions, 1)
+	require.NotNil(t, regions[910])
+	assert.Equal(t, "derp910.example.com", regions[910].Nodes[0].HostName)
+
+	// GET reports the same provenance.
+	code, out = doReq(http.MethodGet, "/web/api/derp", nil)
+	require.Equal(t, http.StatusOK, code, out)
+	assert.Equal(t, true, out["runtime"])
+
+	// Invalid map -> 400, provenance untouched.
+	code, _ = doReq(http.MethodPost, "/web/api/derp", map[string]any{"derpMap": map[string]any{"regions": map[string]any{"0": region}}})
+	assert.Equal(t, http.StatusBadRequest, code)
+	assert.True(t, st.DERPMapIsRuntime())
+}

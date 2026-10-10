@@ -41,6 +41,7 @@ type State interface {
 	ListPreAuthKeys() ([]types.PreAuthKey, error)
 	GetPolicy() (*types.Policy, error)
 	DERPMap() tailcfg.DERPMapView
+	DERPMapIsRuntime() bool
 	PingDB(ctx context.Context) error
 	ElectionSnapshot() map[string]any
 	// Optional writes (implemented by *state.State):
@@ -522,11 +523,17 @@ func handlePolicy(w http.ResponseWriter, r *http.Request, st State) {
 	writeJSON(w, map[string]any{"policy": pol.Data})
 }
 
-// handleDERP serves the DERP map surface. GET returns the live map
-// with the stealth-gating flags; POST applies a full DERP map at
-// runtime (goal #4: the relay setup is configurable from the Web UI
-// without editing derp.yaml and restarting), delegating to
-// state.State.SetDERPMap when the State implements it.
+// handleDERP serves the DERP map surface. GET returns the
+// live map with the stealth-gating flags and whether the
+// map is operator-applied (runtime); POST applies a full
+// DERP map at runtime (goal #4: the relay setup is
+// configurable from the Web UI without editing derp.yaml
+// and restarting), delegating to
+// state.State.SetDERPMapRuntime when the State implements
+// it. A runtime-applied map takes precedence over
+// config-derived maps (the auto-updater will not revert
+// it) and is broadcast to connected clients by the state's
+// change hook when one is registered.
 func handleDERP(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State) {
 	switch r.Method {
 	case http.MethodGet:
@@ -537,6 +544,7 @@ func handleDERP(w http.ResponseWriter, r *http.Request, cfg *types.Config, st St
 		shouldInclude := derp.ShouldIncludeDERP(cfg)
 		writeJSON(w, map[string]any{
 			"derpMap":           dm,
+			"runtime":           st.DERPMapIsRuntime(),
 			"stealth_satisfied": stealthSatisfied,
 			"shouldIncludeDERP": shouldInclude,
 			"xray": map[string]any{
@@ -611,11 +619,12 @@ func validateDERPMap(dm *tailcfg.DERPMap) error {
 	return nil
 }
 
-// applyDERPMap validates an incoming DERP map and applies it to the
-// live state via state.State.SetDERPMap (the same mechanism the
-// periodic DERP ticker and config reload use). The stealth
-// fail-closed gate is unaffected: when stealth is not satisfied the
-// map is stored but still withheld from clients (shouldIncludeDERP
+// applyDERPMap validates an incoming DERP map and applies it
+// to the live state via state.State.SetDERPMapRuntime (the
+// operator-applied variant of the setter the startup load
+// and the periodic DERP ticker use). The stealth fail-closed
+// gate is unaffected: when stealth is not satisfied the map
+// is stored but still withheld from clients (shouldIncludeDERP
 // in the response reports the effective state).
 func applyDERPMap(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State) {
 	body, err := io.ReadAll(r.Body)
@@ -632,23 +641,33 @@ func applyDERPMap(w http.ResponseWriter, r *http.Request, cfg *types.Config, st 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Delegate to state.State.SetDERPMap when available (production
-	// *state.State implements it); mocks keep the stub contract.
-	if ws, ok := any(st).(interface{ SetDERPMap(*tailcfg.DERPMap) }); ok {
-		ws.SetDERPMap(dm)
-		writeDERPApplied(w, cfg, dm, "derp map applied")
+	// Delegate to state.State.SetDERPMapRuntime when available
+	// (production *state.State implements it); mocks keep the
+	// stub contract. A runtime-applied map takes precedence
+	// over config-derived maps — the periodic auto-updater
+	// leaves it alone until the process restarts — and the
+	// state's change hook (when registered) broadcasts it to
+	// connected clients immediately.
+	if ws, ok := any(st).(interface{ SetDERPMapRuntime(dm *tailcfg.DERPMap) }); ok {
+		ws.SetDERPMapRuntime(dm)
+		writeDERPApplied(w, cfg, dm, "derp map applied", true)
 		return
 	}
-	writeDERPApplied(w, cfg, dm, "derp map applied (stub — wire to state.State.SetDERPMap)")
+
+	writeDERPApplied(w, cfg, dm, "derp map applied (stub — wire to state.State.SetDERPMapRuntime)", false)
 }
 
-// writeDERPApplied reports the outcome of a DERP map update together
-// with the stealth-gating flags so the operator sees whether the map
-// will actually be offered to clients right now (fail-closed).
-func writeDERPApplied(w http.ResponseWriter, cfg *types.Config, dm *tailcfg.DERPMap, status string) {
+// writeDERPApplied reports the outcome of a DERP map update
+// together with the stealth-gating flags so the operator
+// sees whether the map will actually be offered to clients
+// right now (fail-closed), and whether the map is
+// operator-applied (runtime), i.e. exempt from the
+// config-derived auto-update.
+func writeDERPApplied(w http.ResponseWriter, cfg *types.Config, dm *tailcfg.DERPMap, status string, runtime bool) {
 	writeJSON(w, map[string]any{
 		"status":            status,
 		"derpMap":           dm,
+		"runtime":           runtime,
 		"stealth_satisfied": derp.IsStealthSatisfied(&cfg.XRay),
 		"shouldIncludeDERP": derp.ShouldIncludeDERP(cfg),
 	})

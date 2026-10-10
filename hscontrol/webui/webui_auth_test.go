@@ -20,6 +20,7 @@ func (s *stubState) ListAllUsers() ([]types.User, error) { return nil, nil }
 func (s *stubState) ListPreAuthKeys() ([]types.PreAuthKey, error) { return nil, nil }
 func (s *stubState) GetPolicy() (*types.Policy, error) { return nil, nil }
 func (s *stubState) DERPMap() tailcfg.DERPMapView { return tailcfg.DERPMapView{} }
+func (s *stubState) DERPMapIsRuntime() bool { return false }
 func (s *stubState) PingDB(ctx context.Context) error { return nil }
 func (s *stubState) ElectionSnapshot() map[string]any { return nil }
 func (s *stubState) ValidateAPIKey(k string) (bool, error) { return k==s.validKey, nil }

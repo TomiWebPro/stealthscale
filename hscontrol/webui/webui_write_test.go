@@ -39,6 +39,7 @@ type writeMockState struct {
 	destroyedAK     []uint64
 	authCache       map[types.AuthID]*types.AuthRequest
 	derpMaps        []*tailcfg.DERPMap
+	derpMapRuntime  bool
 	vlessSet        map[types.NodeID]*xray.VLESSConfig
 	electionMode    types.ElectionMode
 	electionPrimary types.NodeID
@@ -138,8 +139,19 @@ func (m *writeMockState) GetAuthCacheEntry(id types.AuthID) (*types.AuthRequest,
 	return req, ok
 }
 
-func (m *writeMockState) SetDERPMap(dm *tailcfg.DERPMap) {
+// SetDERPMapRuntime records an operator-applied DERP map
+// (the production *state.State implements it; the mock
+// mirrors the runtime flag so tests can read back the
+// provenance the Web UI reports).
+func (m *writeMockState) SetDERPMapRuntime(dm *tailcfg.DERPMap) {
 	m.derpMaps = append(m.derpMaps, dm)
+	m.derpMapRuntime = true
+}
+
+// DERPMapIsRuntime reports whether an operator-applied
+// map has been recorded (shadows state.State).
+func (m *writeMockState) DERPMapIsRuntime() bool {
+	return m.derpMapRuntime
 }
 
 func (m *writeMockState) SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig) error {
@@ -773,6 +785,7 @@ func TestWebUI_DERPLifecycle(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
 	resp.Body.Close()
 	assert.Equal(t, "derp map applied", out["status"])
+	assert.Equal(t, true, out["runtime"])
 	require.Len(t, st.derpMaps, 1)
 	require.Len(t, st.derpMaps[0].Regions, 1)
 	require.NotNil(t, st.derpMaps[0].Regions[1])
@@ -840,7 +853,8 @@ func TestWebUI_DERPLifecycle(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	resp.Body.Close()
 
-	// GET keeps the read-only shape
+	// GET keeps the read-only shape and reports whether
+	// the live map is operator-applied (runtime).
 	resp = doJSON(t, http.MethodGet, srv.URL+"/web/api/derp", nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -850,6 +864,7 @@ func TestWebUI_DERPLifecycle(t *testing.T) {
 	resp.Body.Close()
 	assert.Contains(t, got, "derpMap")
 	assert.Contains(t, got, "stealth_satisfied")
+	assert.Equal(t, true, got["runtime"])
 
 	// wrong method -> 405
 	resp = doJSON(t, http.MethodPut, srv.URL+"/web/api/derp", map[string]any{"derpMap": map[string]any{}})

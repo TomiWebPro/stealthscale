@@ -372,26 +372,26 @@ func (h *StealthScale) scheduledTasks(ctx context.Context) {
 			log.Info().Msg("fetching DERPMap updates")
 
 			derpMap, err := backoff.Retry(ctx, func() (*tailcfg.DERPMap, error) { //nolint:contextcheck
-				derpMap, err := derp.GetDERPMap(h.cfg.DERP)
-				if err != nil {
-					return nil, err
-				}
-
-				if h.cfg.DERP.ServerEnabled && h.cfg.DERP.AutomaticallyAddEmbeddedDerpRegion {
-					region, _ := h.DERPServer.GenerateRegion()
-					derpMap.Regions[region.RegionID] = &region
-				}
-
-				return derpMap, nil
+				return derp.GetDERPMap(h.cfg.DERP)
 			}, backoff.WithBackOff(backoff.NewExponentialBackOff()))
 			if err != nil {
 				log.Error().Err(err).Msg("failed to build new DERPMap, retrying later")
 				continue
 			}
 
-			h.state.SetDERPMap(derpMap)
+			// An operator-applied map takes precedence over the
+			// config-derived auto-update: applying the ticker's
+			// map would silently revert the operator's runtime
+			// map. SetDERPMap enforces the same rule; the check
+			// here keeps the skip visible in the logs.
+			if h.state.DERPMapIsRuntime() {
+				log.Info().Msg("skipping DERP auto-update: operator-applied map takes precedence")
+				continue
+			}
 
-			h.Change(change.DERPMap())
+			// The DERP-map change hook (registered in Serve)
+			// broadcasts the new map to connected clients.
+			h.state.SetDERPMap(derpMap)
 
 		case records, ok := <-extraRecordsUpdate:
 			if !ok {
@@ -660,21 +660,26 @@ func (h *StealthScale) Serve() error {
 		go h.DERPServer.ServeSTUN()
 	}
 
+	// Runtime DERP map updates (Web UI) must reach
+	// connected clients immediately and keep the embedded
+	// region: wire the augmenter and the change-broadcast
+	// hook before the first DERP map store below.
+	h.state.SetDERPMapAugment(h.appendEmbeddedDERPRegion)
+	h.state.OnDERPMapChange(func() { h.Change(change.DERPMap()) })
+
 	derpMap, err := derp.GetDERPMap(h.cfg.DERP)
 	if err != nil {
 		return fmt.Errorf("getting DERPMap: %w", err)
 	}
 
-	if h.cfg.DERP.ServerEnabled && h.cfg.DERP.AutomaticallyAddEmbeddedDerpRegion {
-		region, _ := h.DERPServer.GenerateRegion()
-		derpMap.Regions[region.RegionID] = &region
-	}
+	// SetDERPMap runs the registered augmenter, so the
+	// local map carries the embedded region when it is
+	// enabled.
+	h.state.SetDERPMap(derpMap)
 
 	if len(derpMap.Regions) == 0 {
 		return errEmptyInitialDERPMap
 	}
-
-	h.state.SetDERPMap(derpMap)
 
 	// Start ephemeral node garbage collector and schedule all nodes
 	// that are already in the database and ephemeral. If they are still
@@ -1108,6 +1113,35 @@ func readOrCreatePrivateKey(path string) (*key.MachinePrivate, error) {
 // ignored.
 func (h *StealthScale) Change(cs ...change.Change) {
 	h.mapBatcher.AddWork(cs...)
+}
+
+// appendEmbeddedDERPRegion adds the embedded DERP region to
+// dm when the embedded relay is enabled and
+// automatically_add_embedded_derp_region is set. It is
+// registered as the state's DERP-map augmenter so every
+// stored map — config-derived and operator-applied alike —
+// carries the region (the Web UI layer cannot reach the
+// embedded DERP server directly).
+func (h *StealthScale) appendEmbeddedDERPRegion(dm *tailcfg.DERPMap) {
+	if !h.cfg.DERP.ServerEnabled || !h.cfg.DERP.AutomaticallyAddEmbeddedDerpRegion {
+		return
+	}
+
+	if h.DERPServer == nil {
+		return
+	}
+
+	region, err := h.DERPServer.GenerateRegion()
+	if err != nil {
+		log.Error().Err(err).Msg("failed to generate embedded DERP region")
+		return
+	}
+
+	if dm.Regions == nil {
+		dm.Regions = map[int]*tailcfg.DERPRegion{}
+	}
+
+	dm.Regions[region.RegionID] = &region
 }
 
 // HTTPHandler returns an [http.Handler] for the [StealthScale] control server.

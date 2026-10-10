@@ -151,6 +151,20 @@ type State struct {
 	ipAlloc *hsdb.IPAllocator
 	// derpMap contains the current DERP relay configuration
 	derpMap atomic.Pointer[tailcfg.DERPMap]
+	// derpMapRuntime reports whether the current DERP map
+	// was applied by an operator at runtime (Web UI) rather
+	// than derived from configuration.
+	derpMapRuntime atomic.Bool
+
+	// derpMapMu guards derpMapAugment and derpMapListeners.
+	derpMapMu sync.Mutex
+	// derpMapAugment, when set, mutates a DERP map before
+	// it is stored (used to keep the embedded DERP region
+	// in operator-applied maps).
+	derpMapAugment func(*tailcfg.DERPMap)
+	// derpMapListeners run after every DERP map store so
+	// dependents (the mapper batcher) learn of the change.
+	derpMapListeners []func()
 	// polMan handles policy evaluation and management
 	polMan policy.PolicyManager
 
@@ -316,9 +330,82 @@ func (s *State) Close() error {
 	return nil
 }
 
-// SetDERPMap updates the DERP relay configuration.
+// SetDERPMap stores a config-derived DERP map (the startup
+// load and the periodic auto-update ticker). Precedence: an
+// operator-applied map (SetDERPMapRuntime) wins — while one
+// is in effect, config-derived stores are ignored so the
+// auto-updater cannot silently revert the operator's map.
+// The map passes through the registered augmenter (if any)
+// and change listeners fire after the store.
 func (s *State) SetDERPMap(dm *tailcfg.DERPMap) {
+	if s.derpMapRuntime.Load() {
+		log.Debug().Msg("ignoring config-derived DERP map: operator-applied map takes precedence")
+		return
+	}
+
+	s.storeDERPMap(dm, false)
+}
+
+// SetDERPMapRuntime stores an operator-applied DERP map
+// (Web UI runtime update). Runtime maps take precedence over
+// config-derived maps: the periodic auto-updater leaves
+// them alone until the process restarts. The map passes
+// through the registered augmenter (if any) and change
+// listeners fire after the store.
+func (s *State) SetDERPMapRuntime(dm *tailcfg.DERPMap) {
+	s.storeDERPMap(dm, true)
+}
+
+// DERPMapIsRuntime reports whether the current DERP map was
+// applied by an operator at runtime (and is therefore exempt
+// from the config-derived auto-update).
+func (s *State) DERPMapIsRuntime() bool {
+	return s.derpMapRuntime.Load()
+}
+
+// SetDERPMapAugment registers fn to run on every DERP map
+// before it is stored; the latest registration wins. Used to
+// keep the embedded DERP region in operator-applied maps
+// (the augmenter closes over the embedded DERP server,
+// which this package cannot reach).
+func (s *State) SetDERPMapAugment(fn func(*tailcfg.DERPMap)) {
+	s.derpMapMu.Lock()
+	defer s.derpMapMu.Unlock()
+
+	s.derpMapAugment = fn
+}
+
+// OnDERPMapChange registers fn to run after every DERP map
+// store (config-derived or operator-applied). The
+// StealthScale app registers the mapper-batcher broadcast
+// here so a Web UI-applied map reaches connected clients
+// immediately.
+func (s *State) OnDERPMapChange(fn func()) {
+	s.derpMapMu.Lock()
+	defer s.derpMapMu.Unlock()
+
+	s.derpMapListeners = append(s.derpMapListeners, fn)
+}
+
+// storeDERPMap runs the augmenter, stores dm, and notifies
+// listeners. runtime marks the map as operator-applied for
+// precedence purposes.
+func (s *State) storeDERPMap(dm *tailcfg.DERPMap, runtime bool) {
+	s.derpMapMu.Lock()
+	augment := s.derpMapAugment
+	listeners := slices.Clone(s.derpMapListeners)
+	s.derpMapMu.Unlock()
+
+	if augment != nil && dm != nil {
+		augment(dm)
+	}
+
 	s.derpMap.Store(dm)
+	s.derpMapRuntime.Store(runtime)
+
+	for _, fn := range listeners {
+		fn()
+	}
 }
 
 // DERPMap returns the current DERP relay configuration for peer-to-peer connectivity.
