@@ -248,6 +248,7 @@ Format:
 - note: pre-existing dirty tree (CHANGELOG.md, Dockerfile.tailscale-HEAD, docs/stealthscale/overview.md, hscontrol/types/config.go, hscontrol/webui/frontend/*, integration/dockertestutil/network_emulation.go, untracked cmd/stealthscale/cli/nodes_vless_test.go + integration/network_emulation_scenario_test.go) left untouched per ownership rules
 
 ## 2026-10-10 04:47 UTC — ss-maintain
+
 - concurrency guard: passed (no lock held); lock acquired 04:40 UTC, released after commit
 - build: `go build ./...` green (GOTOOLCHAIN=go1.26.7)
 - tests: `go test -short -count=1 ./hscontrol/... ./cmd/...` all green (baseline: hscontrol 214s, servertest 229s, mapper 44s, state 22s, policy/v2 13s); derp+stealth packages re-run green with the new tests; race skipped (needs cgo, absent in this env)
@@ -277,6 +278,7 @@ Format:
 - issue marked done and moved to issues/closed/
 
 ## 2026-10-10 05:00 UTC — ss-maintain
+
 - concurrency guard passed (no lock held); acquired lock at 04:50 UTC, released after cycle
 - build: `go build ./...` green (GOTOOLCHAIN=go1.26.7)
 - tests: `go test -short ./hscontrol/... ./cmd/...` all pass (hscontrol 210s, servertest 231s, mapper 43s)
@@ -288,6 +290,7 @@ Format:
 - commit: `74825a3` (gofumpt + golangci-lint --new-from-rev=HEAD~1 ./hscontrol/... clean, 0 issues; --no-verify because the prek hook requires nix, not installed here — equivalent check run directly)
 
 ## 2026-10-10 05:31 UTC — ss-maintain
+
 - concurrency guard passed (no lock held); acquired lock at 05:10:25 UTC, released after cycle
 - build: `go build ./...` green (GOTOOLCHAIN=go1.26.7). Transient: the webui agent's in-flight edit briefly broke the build (unused `policyv2` import in hscontrol/webui/webui.go at 05:11 UTC); the agent fixed its own edit by 05:14 — left untouched per ownership rules
 - tests: `go test -short ./hscontrol/... ./cmd/...` green for all committed packages (hscontrol, state, stealth, types, util, xray, mapper, cmd/...). Two failures observed, both in the webui agent's in-flight (uncommitted, actively edited) files, not committed code: hscontrol/webui `TestWebUI_NodeLifecycleStub` (mid-refactor routing; the agent was editing webui.go + webui_write_test.go during the run) and servertest `TestWebUI_ManagementDelegatesToRealState` (the agent's new untracked hscontrol/servertest/webui_management_test.go uses an invalid policy fixture — `autogroup:admin` in tagOwners — which the policy engine correctly rejects: parseOwner accepts only user:/group:/tag: (policy/v2/types.go) and autogroup:admin is explicitly unsupported SaaS-only (types.go:748); the upstream tagOwners corpus in testdata/acl_results uses only emails/groups/tags). Baseline at HEAD (74825a3) was fully green per the 05:00 run
@@ -334,6 +337,7 @@ Format:
 - issue marked done and moved to issues/closed/
 
 ## 2026-10-10 05:44 UTC — ss-maintain
+
 - concurrency guard passed (no lock held); acquired lock at 05:40 UTC, released after cycle
 - build: `go build ./...` green (GOTOOLCHAIN=go1.26.7)
 - tests: `go test -short ./hscontrol/... ./cmd/...` all pass — including hscontrol/webui and servertest; the webui agent's in-flight edits (dirty webui.go/webui_test.go/webui_write_test.go/frontend, new webui_management_test.go) now compile and pass, so the invalid `autogroup:admin` tagOwners fixture observed at 05:31 was fixed by its owner
@@ -344,9 +348,11 @@ Format:
 - commit: `6ca6539` (gofmt clean; golangci-lint --new-from-rev=HEAD ./hscontrol/mapper/... 0 issues; --no-verify: prek shells out to nix, absent in this env)
 
 ## 2026-10-10 06:15 UTC — stealth-builder
+
 - concurrency guard passed (lock stale: 05:50 UTC, 25 min old > 15 min threshold); no open issues (open/ and in-progress/ empty) — cycle aborted (queue empty)
 
 ## 2026-10-10 06:28 UTC — ss-maintain
+
 - concurrency guard passed (no lock held); acquired lock at 06:26 UTC, released after cycle
 - build: `go build ./...` green; tests: `go test -short ./hscontrol/... ./cmd/...` green under the pinned toolchain (GOTOOLCHAIN=go1.26.7 per Makefile, 27 pkgs ok, EXIT=0). Under the ambient go1.27.1 only the known SSH-testdata failures appear (closed issue 202610082015 — tailcfg.SSHAction `format:nano` tag; the Makefile already pins go1.26.7, so CI/dev are unaffected)
 - bug found & fixed in fresh code (d784e4d): WebUI `POST /web/api/auth/{id}/approve|reject` delivered an accept/reject verdict with an empty NodeView to ANY pending session. For registration sessions the verdict's Node is load-bearing — the registering client's waitForFollowup (hscontrol/auth.go:334-338) treats accept-without-node as expiry and silently restarts the registration (a reject falls through to the same restart path), and the consumed channel makes the real completion via HandleNodeFromAuthPath a no-op: the admin sees "approved" while the node never joins. Fix: refuse registration sessions with 409 pointing at the node's auth URL (the interactive flow resolves the identity and creates the node); approve/reject remains for SSH-check sessions, whose consumer reads only verdict.Accept() (noise.go:689). Bare/SSH-check sessions unaffected
@@ -371,7 +377,97 @@ Format:
 
 - concurrency guard passed (lock stale: 06:35 UTC, ~21 min old > 15 min threshold); no open issues (open/ and in-progress/ empty) — cycle aborted (queue empty)
 
+## 2026-10-10 07:05 UTC — ss-maintain
+
+- concurrency guard passed (no lock held); lock acquired 06:35 UTC, kept fresh with touch on long steps, released after commit (still owned by this run)
+- build: `go build ./...` green (GOTOOLCHAIN=go1.26.7)
+- tests: full `GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/...` green at new HEAD (27 packages ok, 0 fail — re-run after the worker's 0df7725 landed mid-cycle). Bare go1.27.1 run fails only in hscontrol/types/testcapture (TestWriteReadRoundtrip_SSH, TestWrite_SSH_StatsUseSSHRules: "unsupported `format` tag option") — the known Go 1.27 encoding/json strictness issue pinned away by the Makefile's GOTOOLCHAIN=go1.26.7, not a code bug
+- added failure-point test (priority: DNS failures): hscontrol/servertest/dns_propagate_test.go — TestDNSExtraRecordsChangePropagatesDuringActivePoll: an extra-records edit via the production path (cfg.SetExtraRecords + Change(change.ExtraRecords())) must reach a client holding an active long-poll — new record present, stale one gone, resolver list intact, delivered as a pushed update (UpdateCount strictly increases, no reconnect). ~2s. Validated by mutation: dropping IncludeDNS from change.ExtraRecords() makes it time out. Race run skipped (needs cgo, absent — same as prior cycles)
+- fixed trivial bug myself: cmd/stealthscale/cli/up.go VLESS dial-failure hint told users to "check pbk, sid, dest, fp columns with --verbose" — `stscale nodes vless` has no --verbose flag (those columns print by default). Same bug class as the 01:45 --address fix. No doc quoted the flag, so no docs update was required (noted per DOCS RULE 2); strengthened TestUpAddressOverrideAppliesToFetchedEndpoint to pin "stscale nodes vless" present / "--verbose" absent in the hint
+- bug hunting: reviewed webui management-parity write handlers (d784e4d) and the a6f94fb/0df7725 registration-session refusals — correct (409 before FinishAuth; SSH-check sessions unaffected); verified tailcfg.DNSConfig.Clone is a deep copy (no shared-resolver mutation in generateDNSConfig); hscontrol/dns extrarecords manager guards (nil-hostinfo, hash dedup, unlock-before-send) solid
+- issues filed: none (no promised-feature gaps found; queue was empty and the one in-progress issue was closed by the worker mid-cycle) | issues closed: none (worker closed 202610100626-api-v1-auth-approve-restarts-registration in 0df7725)
+- commit: `ab8ad94` (servertest DNS failure-point test + cli hint fix; --no-verify because the prek hook shells out to nix, absent in this env — equivalent golangci-lint --new-from-rev=HEAD on both packages: 0 new issues, gofmt/gofumpt clean)
+
+## 2026-10-10 07:06 UTC — stealth-builder
+
+- concurrency guard tripped (lock fresh: ss-maintain, touched 07:00 UTC, ~6 min old < 15 min threshold — its uncommitted 07:05 entry confirms the run is still in flight); open/ and in-progress/ empty anyway — cycle skipped (queue empty); entry left uncommitted because a commit would sweep ss-maintain's in-flight DEVLOG changes into this agent's commit (ownership rules)
+
 ## 2026-10-10 07:16 UTC — stealth-builder
 
 - concurrency guard: /tmp/ss/agent.lock held by ss-maintain (07:10 UTC, ~5 min old, < 15 min threshold) — skipped cycle
 - also: no open issues (issues/open/ and issues/in-progress/ empty)
+
+## 2026-10-10 07:28 UTC — ss-maintain
+
+- concurrency guard passed (no lock held); lock acquired 07:10 UTC, kept fresh with touch on long steps, released after commit (still owned by this run). One stealth-builder cycle (07:16) correctly skipped behind this run's lock
+- build: `go build ./...` green (GOTOOLCHAIN=go1.26.7)
+- tests: full `GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/...` green at HEAD (27 packages ok, 0 fail; hscontrol 213s, servertest 232s, mapper 44s, state 23s). Ambient go1.27.1 not used (known SSH-testdata `format:nano` strictness issue, closed 202610082015; Makefile pins go1.26.7)
+- added failure-point test (priority: auth expiry): hscontrol/auth_test.go — TestRegistrationSessionTTLExpiryRestartsFollowup (+ helper createTestAppWithRegisterCacheTTL): a pending registration whose auth cache entry TTL elapses while the client is parked on waitForFollowup must be woken by the LRU eviction callback (ErrRegistrationExpired) and answered with a FRESH AuthURL bound to the same machine key — never a hang, a 401, or the dead session's URL. ~0.3s via Tuning.RegisterCacheExpiration=300ms. Mutation-validated: commenting out the eviction callback's FinishAuth makes the poll hang the full 10s ctx and the test fails; production code reverted after validation
+- bug hunting: reviewed the d784e4d webui management-parity route table (dispatch on /nodes/{id}/{expire,rename,tags,routes}, preauthkeys/apikeys/auth/policy actions) — all delegate to real *state.State methods, no stubs on the real path; verified types.AuthRequest.FinishAuth is double-close safe (atomic.Bool guard) so the eviction callback and an admin verdict cannot double-send; SetNodeExpiry/SetNodeTags update NodeStore before DB per the documented ordering. No code bugs found
+- docs-contradicts-code found (DOCS RULE 3): docs/stealthscale/overview.md "Current status" gap list (~line 189) still says "Remaining: advanced node tag/route management", but d784e4d implemented node expire/rename/tags/routes (webui.go:235-265 + frontend app.js calls) and updated docs/usage/webui.md — overview.md was missed. Filed (not fixed inline: doc-flow fixes belong to ss-worker per DOCS RULE 3)
+- issues filed: 202610100727-overview-stale-webui-gap-list | issues closed: none
+- commit: `9a82a50` (hscontrol: add failure-point test for registration session TTL expiry; --no-verify: prek shells out to nix, absent in this env — equivalent checks run directly: golangci-lint --new-from-rev=HEAD ./hscontrol/... 0 issues after 8 exhaustruct_v5 test-fixture nolints + 1 wsl fix, gofmt clean)
+
+## 2026-10-10 07:33 UTC — stealth-builder
+
+- concurrency guard: /tmp/ss/agent.lock held by ss-maintain (acquired 07:30:47Z, ~2 min old < 15 min threshold; run actively in flight — `go test -short ./hscontrol/... ./cmd/...` observed running) — cycle skipped; open issue 202610100727-overview-stale-webui-gap-list (P2, docs) left in open/ for the next unguarded cycle; entry left uncommitted because a commit would sweep ss-maintain's in-flight DEVLOG/doc changes into this agent's commit (ownership rules, same as the 07:06 skip)
+
+## 2026-10-10 07:36 UTC — stealth-builder
+
+- concurrency guard: /tmp/ss/agent.lock held by ss-maintain (acquired 07:30:47Z, ~5 min old < 15 min threshold; run actively in flight, PID 937733 ss-maintain-20261010-093007) — cycle skipped; open issue 202610100727-overview-stale-webui-gap-list (P2, docs) left in open/ for the next unguarded cycle; entry left uncommitted because a commit would sweep ss-maintain's in-flight changes (dirty tree: CHANGELOG.md, DEVLOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, untracked cmd/stealthscale/cli/nodes_vless_test.go) into this agent's commit (ownership rules, same as the 07:33 skip); a second stealth-builder instance (ss-worker-20261010-093507) is also in flight behind the same guard
+
+## 2026-10-10 08:00 UTC — ss-maintain
+- concurrency guard passed (no lock held); lock acquired 07:30Z, kept fresh with touch on long steps, released after commit (still owned by this run)
+- build: `go build ./...` green (GOTOOLCHAIN=go1.26.7)
+- tests: full `GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/...` green at cycle start (27 pkgs ok, 0 fail; hscontrol 214s, servertest 234s, mapper 44s); re-ran the two affected packages after the changes — hscontrol 213s ok, cmd/stealthscale + cli ok
+- fixed trivial bug myself (product direction 1, CLI flow): cmd/stealthscale/cli/up.go dropped tailcfg.RegisterResponse.AuthURL on pending registrations — only a generic "machine not yet authorized" warning printed, forcing the operator to dig the auth ID out of the coordinator's Web UI even though the URL embeds the auth ID and renders the exact `stealthscale auth register --auth-id <id> --user <user>` command (web provider, handlers.go:405-426) or the OIDC confirmation interstitial; the approve/reject endpoints deliberately refuse registration sessions (0df7725), so the URL is the only completion path. New pendingRegistrationMessage prints the URL verbatim; the expired-node path (AuthURL="") keeps the generic hint. Docs updated in the same commit per DOCS RULE 2 (docs/stealthscale/clients.md "Registering a node" section now documents the pending state and the URL-as-handle flow)
+- added failure-point test (product direction 3, OIDC hiccups): hscontrol/oidc_sshcheck_test.go — TestOIDCCallbackSSHCheckIdentityBinding drives the FULL OIDC callback (code exchange against a fake IdP token endpoint, RS256 ID-token verification against a hand-rolled JWKS, state+nonce CSRF cookies, tolerated userinfo-endpoint failure, doOIDCAuthorization, user resolution via GetUserByOIDCIdentifier) into the previously untested SSH check-mode branch of OIDCCallbackHandler (oidc.go:357-420) — the anti-stolen-key control. Pins all six guards: owner match → 200 + accepting verdict on the WaitForAuth channel; foreign owner → 403; tagged src node → 403; deleted src node → 410; expired auth session → 410; non-SSH-check session → 400; refusals deliver NO verdict. ~1.2s. Mutation-validated: neutering the owner guard (oidc.go:409) fails the foreign-owner subtest; reverted after validation
+- bug hunting: reviewed every d784e4d webui management handler (node expire/rename/tags/routes, preauthkey expire/delete, apikeys CRUD+expire, auth status/approve/reject, policy check, election) — all validate IDs/bodies, 404 unknown resources, delegate to real *state.State via type-asserted writer interfaces, refuse registration sessions on approve/reject (a6f94fb guard intact); SSH-check prompts already surface their auth URL (noise.go:583-588). No code bugs found
+- notes: cmd/stealthscale/cli/nodes_vless_test.go is UNTRACKED leftover work from the ~01:45 --address cycle (valid, passing, pins the --address flag on 'stscale nodes vless') with one testifylint nit (require.Equal(t, "", ...) → require.Empty) — left untouched per ownership rules; whoever commits it should lint it. Pre-existing uncommitted doc reformatting in docs/ref/api.md, overview.md, webui.md, CHANGELOG.md and +40 DEVLOG lines from prior cycles also left alone (not swept into this commit)
+- issues filed: none (no promised-feature gaps found; open/ holds only 202610100727-overview-stale-webui-gap-list for ss-worker per DOCS RULE 3) | issues closed: none
+- commit: `0e8b95a` (--no-verify: prek shells out to nix, absent in this env — equivalent checks run directly: golangci-lint --new-from-rev=HEAD ./hscontrol/ → 0 issues, ./cmd/stealthscale/cli/ → 0 issues in changed files, gofmt clean on all changed files)
+
+## 2026-10-10 08:02 UTC — stealth-builder
+
+- concurrency guard: PASSED at cycle start (~07:47 UTC; lock mtime
+  ~07:28 UTC, ~19 min old > 15 min threshold — stale holder). ss-maintain
+  (PID 937733) re-touched the lock ~07:52 UTC mid-cycle while running its
+  test suite, so the lock reads fresh again since; this cycle had already
+  claimed the issue (moved open/ → in-progress/) before that re-touch —
+  the claim is the collision-prevention mechanism, so the cycle proceeded
+- picked up P2 docs issue `202610100727-overview-stale-webui-gap-list`
+  (overview.md "Current status" gap list still promised "Remaining:
+  advanced node tag/route management")
+- verified against code (code is truth): `hscontrol/webui/webui.go` route
+  table serves the complete management surface under /web/api and
+  /admin/api — POST /nodes/{id}/{expire,rename,tags,routes} +
+  DELETE /nodes/{id} (dispatch webui.go:235-265 → handleNodeExpire/
+  Rename/Tags/Routes), POST /users, preauthkey create/expire/delete,
+  apikeys CRUD (masked prefixes on list, raw key returned exactly once),
+  auth approve/reject (SSH-check sessions only; registration sessions
+  refused per a6f94fb/0df7725), policy GET/PUT/POST + POST /policy/check;
+  frontend app.js issues the node expire/rename/tags/routes calls and
+  index.html has the API Keys, Auth and Policy tabs — so the "Remaining"
+  clause was stale (implemented in d784e4d) and the bullet's "optional
+  WriteState methods" claim was also stale (d784e4d switched to
+  type-asserted write interfaces, webui.go:33-80)
+- fixed docs/stealthscale/overview.md "Current status" bullet: removed the
+  stale "Remaining: advanced node tag/route management" clause, listed the
+  complete surface, corrected the delegation description (type-asserted
+  write interfaces, stub fallback for mocks), cross-referenced the already
+  accurate management-parity note in docs/usage/webui.md
+- verified: `go test ./hscontrol/webui/...` ok; `go build ./...` green
+  (docs-only change, no Go code touched)
+- issue marked done (`<!-- status: done -->`) and moved to issues/closed/
+- ownership: staged ONLY this docs fix in overview.md (the file's
+  pre-existing formatter hunks, dirty since before 04:47 UTC, stay
+  uncommitted per ownership rules); DEVLOG.md committed wholesale because
+  append-only ordering forbids staging this entry alone — it necessarily
+  includes the uncommitted 07:05/07:06/07:28/07:33/07:36/08:00 entries
+  from prior cycles (their code commits ab8ad94, 9a82a50, 0e8b95a are
+  already in HEAD) plus the prettier blank-line normalization; the
+  remaining dirty files (CHANGELOG.md, docs/ref/api.md, docs/usage/webui.md,
+  untracked cmd/stealthscale/cli/nodes_vless_test.go) belong to other
+  runs and were left untouched
+- commit: TBD (--no-verify: prek shells out to nix, absent in this env —
+  equivalent checks run directly above)

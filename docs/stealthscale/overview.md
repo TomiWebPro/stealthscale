@@ -184,11 +184,21 @@ This section is the honest gap list so a future agent knows what is TODO versus
 done. It reflects the codebase at the time of writing:
 
 - **Web UI is now read-write for core resources.** `hscontrol/webui/webui.go`
-  now exposes `POST /api/users`, `POST /api/preauthkeys`, `PUT /api/policy` and
-  `DELETE /api/nodes/{id}` (plus `GET` for all). The `State` interface has
-  optional `WriteState` methods; handlers validate JSON and delegate to
-  `state.State` when available, otherwise stub for coverage. Remaining: advanced
-  node tag/route management. Use headscale-ui as the interaction-model reference.
+  exposes the full management surface under `/web/api/*` and `/admin/api/*`
+  (plus `GET` for all): node expire/rename/tags/routes and delete
+  (`POST /nodes/{id}/{expire,rename,tags,routes}`, `DELETE /nodes/{id}`),
+  user creation (`POST /users`), pre-auth key create/expire/delete, API-key
+  CRUD (list shows masked prefixes; the raw key is returned exactly once),
+  auth approve/reject (SSH-check sessions — registration sessions complete
+  via the node's auth URL) and policy `PUT` plus `POST /policy/check`
+  (validates a draft against live users and nodes). Handlers validate JSON
+  and delegate to `state.State` via type-asserted write interfaces
+  (`any(st).(interface{...})`, so this package keeps no state import),
+  falling back to stubs for mocks. Every operation is reachable from the
+  Web UI itself — per-row actions plus the API Keys, Auth and Policy tabs;
+  see the management-parity note in
+  [docs/usage/webui.md](../usage/webui.md). Use headscale-ui as the
+  interaction-model reference.
 - **VLESS stealth transport implemented via true Reality.**
   `hscontrol/xray/server.go` uses `github.com/xtls/reality` (`reality.Config`,
   `reality.Server`, `reality.DetectPostHandshakeRecordsLens`) to steal the
