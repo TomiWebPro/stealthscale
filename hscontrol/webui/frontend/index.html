@@ -136,6 +136,14 @@
         <div class="toolbar"><button onclick="loadDERP()">Refresh</button></div>
         <div class="card"><pre id="derpBody" class="pre"></pre></div>
         <div id="derpStatus" class="pill-row"></div>
+        <div class="card" style="margin-top:14px">
+          <div class="toolbar">
+            <button onclick="applyDERP()">Apply map</button>
+            <span class="dim">Edit the DERP map (JSON) and apply it to the live server — no derp.yaml edit or restart needed. Replaces the whole map.</span>
+          </div>
+          <textarea id="derpInput" class="pre" rows="12" style="width:100%"></textarea>
+          <pre id="derpResult" class="pre"></pre>
+        </div>
       </section>
       <section id="tab-vless" class="view">
         <div class="toolbar">
@@ -143,6 +151,23 @@
           <button onclick="loadVLESS()">Fetch VLESS URI</button>
         </div>
         <div class="card"><pre id="vlessBody" class="pre">Enter a node ID to fetch its VLESS endpoint.</pre></div>
+        <div class="card" style="margin-top:14px">
+          <div class="toolbar">
+            <button onclick="applyVLESS()">Apply endpoint settings</button>
+            <span class="dim">Set the node's VLESS endpoint (address, port, security variant) — validated against the transport rules</span>
+          </div>
+          <div class="toolbar" style="margin-top:8px">
+            <input id="vlessAddress" placeholder="Address (e.g. 10.0.0.1)" style="max-width:240px" />
+            <input id="vlessPort" placeholder="Port (e.g. 10001)" style="max-width:140px" />
+            <select id="vlessSecurity">
+              <option value="reality_xtls">reality_xtls</option>
+              <option value="xtls">xtls</option>
+              <option value="tls">tls</option>
+              <option value="none">none</option>
+            </select>
+          </div>
+          <pre id="vlessResult" class="pre"></pre>
+        </div>
       </section>
       <section id="tab-health" class="view">
         <div class="toolbar"><button onclick="loadHealth()">Refresh</button></div>

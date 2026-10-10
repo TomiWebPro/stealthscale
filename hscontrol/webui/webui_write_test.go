@@ -17,6 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
 	"github.com/tomiwebpro/stealthscale/hscontrol/types/change"
+	"github.com/tomiwebpro/stealthscale/hscontrol/xray"
+	"tailscale.com/tailcfg"
 )
 
 // writeMockState extends mockState with the optional write
@@ -36,6 +38,8 @@ type writeMockState struct {
 	expiredAK   []uint64
 	destroyedAK []uint64
 	authCache   map[types.AuthID]*types.AuthRequest
+	derpMaps    []*tailcfg.DERPMap
+	vlessSet    map[types.NodeID]*xray.VLESSConfig
 }
 
 func newWriteMock() *writeMockState {
@@ -129,6 +133,18 @@ func (m *writeMockState) DestroyAPIKey(key types.APIKey) error {
 func (m *writeMockState) GetAuthCacheEntry(id types.AuthID) (*types.AuthRequest, bool) {
 	req, ok := m.authCache[id]
 	return req, ok
+}
+
+func (m *writeMockState) SetDERPMap(dm *tailcfg.DERPMap) {
+	m.derpMaps = append(m.derpMaps, dm)
+}
+
+func (m *writeMockState) SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig) error {
+	if m.vlessSet == nil {
+		m.vlessSet = map[types.NodeID]*xray.VLESSConfig{}
+	}
+	m.vlessSet[nodeID] = cfg
+	return nil
 }
 
 const testAuthID = "hskey-authreq-0123456789abcdef01234567"
@@ -494,6 +510,73 @@ func TestWebUI_AuthApproveReject(t *testing.T) {
 	resp2.Body.Close()
 }
 
+// TestWebUI_AuthDoubleFinishIsNoop pins the double-finish
+// failure mode of the Web UI auth approve/reject endpoints:
+// an SSH-check session that has already been decided — a
+// double-click on Approve, the same session approved from
+// two browser tabs, or an approve-then-reject race — must be
+// a no-op, never a second verdict. [types.AuthRequest.FinishAuth]
+// guards this with its closed flag: without it the second
+// call would send on the closed verdict channel and panic the
+// handler (net/http answers a panicking handler by closing
+// the connection, so the operator's second click would surface
+// as a transport error), and a racing reject could flip an
+// already-delivered accept for the parked SSH-check follow-up
+// (hscontrol sshActionFollowUp consumes exactly one verdict).
+func TestWebUI_AuthDoubleFinishIsNoop(t *testing.T) {
+	cfg := testConfig()
+
+	st := newWriteMock()
+
+	// SSH-check sessions are the sessions the Web UI decides;
+	// registration sessions are refused with 409 (pinned in
+	// TestWebUI_AuthApproveReject).
+	authReq := types.NewSSHCheckAuthRequest(types.NodeID(1), types.NodeID(2))
+	st.authCache[types.AuthID(testAuthID)] = authReq
+
+	h := Handler(cfg, st)
+	srv := httptest.NewServer(h)
+
+	defer srv.Close()
+
+	// First approve: one accepting verdict is delivered.
+	resp := doJSON(t, http.MethodPost, srv.URL+"/web/api/auth/"+testAuthID+"/approve", map[string]string{})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	select {
+	case v := <-authReq.WaitForAuth():
+		assert.True(t, v.Accept())
+		require.NoError(t, v.Err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected the first approve to deliver a verdict")
+	}
+
+	// Double-click approve, then a racing reject: both must be
+	// no-ops. The handler answers 200 (the session is already
+	// finished, but the request itself is valid) — a missing
+	// closed-guard panics on send-to-closed-channel and the
+	// client sees a dropped connection instead.
+	for _, action := range []string{"approve", "reject"} {
+		resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/auth/"+testAuthID+"/"+action, map[string]string{})
+		require.Equal(t, http.StatusOK, resp.StatusCode, "%s after a finished session must be a no-op", action)
+		resp.Body.Close()
+	}
+
+	// The verdict channel is closed after the single
+	// verdict, so reads return promptly instead of
+	// parking. (A closed channel yields the zero-value
+	// AuthVerdict, whose Accept() is vacuously true —
+	// the real guard is the 200 no-op above: a missing
+	// closed-guard would have panicked on the second
+	// FinishAuth and dropped these connections.)
+	select {
+	case <-authReq.WaitForAuth():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("verdict channel must be closed after the first verdict")
+	}
+}
+
 func TestWebUI_PolicyCheck(t *testing.T) {
 	cfg := testConfig()
 	st := newWriteMock()
@@ -634,4 +717,235 @@ func TestWebUI_DeleteNode(t *testing.T) {
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestWebUI_DERPLifecycle(t *testing.T) {
+	cfg := testConfig()
+	st := newWriteMock()
+	h := Handler(cfg, st)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	validRegion := map[string]any{
+		"regionID": 1,
+		"nodes": []any{
+			map[string]any{"name": "1a", "regionID": 1, "hostName": "derp.example.com"},
+		},
+	}
+
+	// POST with the {"derpMap": ...} wrapper (the shape GET /derp returns)
+	resp := doJSON(t, http.MethodPost, srv.URL+"/web/api/derp", map[string]any{"derpMap": map[string]any{"regions": map[string]any{"1": validRegion}}})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var out map[string]any
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	resp.Body.Close()
+	assert.Equal(t, "derp map applied", out["status"])
+	require.Len(t, st.derpMaps, 1)
+	require.Len(t, st.derpMaps[0].Regions, 1)
+	require.NotNil(t, st.derpMaps[0].Regions[1])
+	// Response reports the stealth gate so the operator sees whether
+	// the map is actually offered to clients right now.
+	assert.Contains(t, out, "stealth_satisfied")
+	assert.Contains(t, out, "shouldIncludeDERP")
+
+	// POST a bare DERPMap object (stock derp.yaml-shaped JSON)
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/derp", map[string]any{"regions": map[string]any{"1": validRegion}})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+	require.Len(t, st.derpMaps, 2)
+
+	// empty region set is valid — it disables DERP relays
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/derp", map[string]any{"derpMap": map[string]any{"regions": map[string]any{}}})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+	require.Len(t, st.derpMaps, 3)
+	assert.Empty(t, st.derpMaps[2].Regions)
+
+	// invalid JSON -> 400
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/derp", map[string]any{"derpMap": "not-a-map"})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// region key / RegionID mismatch -> 400
+	badRegion := map[string]any{
+		"regionID": 999,
+		"nodes":    []any{map[string]any{"name": "5a", "regionID": 5, "hostName": "derp.example.com"}},
+	}
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/derp", map[string]any{"derpMap": map[string]any{"regions": map[string]any{"5": badRegion}}})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// non-positive region id -> 400
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/derp", map[string]any{"derpMap": map[string]any{"regions": map[string]any{"0": validRegion}}})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// node RegionID does not match its region -> 400
+	wrongNodeRegion := map[string]any{
+		"regionID": 1,
+		"nodes":    []any{map[string]any{"name": "1a", "regionID": 2, "hostName": "derp.example.com"}},
+	}
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/derp", map[string]any{"derpMap": map[string]any{"regions": map[string]any{"1": wrongNodeRegion}}})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// node without a name -> 400
+	namelessNode := map[string]any{
+		"regionID": 1,
+		"nodes":    []any{map[string]any{"regionID": 1, "hostName": "derp.example.com"}},
+	}
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/derp", map[string]any{"derpMap": map[string]any{"regions": map[string]any{"1": namelessNode}}})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// node without hostname or forced IP -> 400
+	unreachableNode := map[string]any{
+		"regionID": 1,
+		"nodes":    []any{map[string]any{"name": "1a", "regionID": 1}},
+	}
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/derp", map[string]any{"derpMap": map[string]any{"regions": map[string]any{"1": unreachableNode}}})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// GET keeps the read-only shape
+	resp = doJSON(t, http.MethodGet, srv.URL+"/web/api/derp", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var got map[string]any
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	resp.Body.Close()
+	assert.Contains(t, got, "derpMap")
+	assert.Contains(t, got, "stealth_satisfied")
+
+	// wrong method -> 405
+	resp = doJSON(t, http.MethodPut, srv.URL+"/web/api/derp", map[string]any{"derpMap": map[string]any{}})
+	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+	resp.Body.Close()
+
+	// stub path: a State without SetDERPMap keeps the stub contract
+	stStub := &mockState{}
+	hStub := Handler(cfg, stStub)
+	srvStub := httptest.NewServer(hStub)
+	defer srvStub.Close()
+
+	resp = doJSON(t, http.MethodPost, srvStub.URL+"/web/api/derp", map[string]any{"derpMap": map[string]any{"regions": map[string]any{"1": validRegion}}})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var stubOut map[string]any
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&stubOut))
+	resp.Body.Close()
+	assert.Contains(t, stubOut["status"], "stub")
+}
+
+func TestWebUI_VLESSSettings(t *testing.T) {
+	cfg := testConfig()
+	st := newWriteMock()
+	st.nodes = []types.NodeView{
+		(&types.Node{ID: types.NodeID(1), Hostname: "node-one", GivenName: "node-one"}).View(), //nolint:exhaustruct_v5 // test fixture: only fields under test
+	}
+	h := Handler(cfg, st)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// valid settings delegate to SetNodeVLESS and echo the endpoint
+	resp := doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/1", map[string]any{"address": "10.0.0.1", "port": 10001, "security": "reality_xtls"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var out map[string]any
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	resp.Body.Close()
+	assert.Equal(t, "vless endpoint set", out["status"])
+	require.Contains(t, st.vlessSet, types.NodeID(1))
+	assert.Equal(t, "10.0.0.1", st.vlessSet[types.NodeID(1)].Address)
+	assert.Equal(t, 10001, st.vlessSet[types.NodeID(1)].Port)
+	assert.Equal(t, "reality_xtls", st.vlessSet[types.NodeID(1)].Security)
+	// The response carries the derived UUID and the reusable URI.
+	ep := out["endpoint"].(map[string]any)
+	assert.NotEmpty(t, ep["uuid"])
+	assert.Contains(t, ep["uri"], "vless://")
+	assert.Contains(t, ep["uri"], "security=reality_xtls")
+
+	// "reality" is accepted as the reality_xtls alias
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/1", map[string]any{"address": "10.0.0.1", "port": 10001, "security": "reality"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+	assert.Equal(t, "reality_xtls", st.vlessSet[types.NodeID(1)].Security)
+
+	// empty security defaults to reality_xtls
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/1", map[string]any{"address": "10.0.0.1", "port": 10001})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+	assert.Equal(t, "reality_xtls", st.vlessSet[types.NodeID(1)].Security)
+
+	// invalid security variant -> 400
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/1", map[string]any{"address": "10.0.0.1", "port": 10001, "security": "carrier-pigeon"})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// port out of range -> 400
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/1", map[string]any{"address": "10.0.0.1", "port": 65536, "security": "reality_xtls"})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/1", map[string]any{"address": "10.0.0.1", "port": 0, "security": "reality_xtls"})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// empty address -> 400
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/1", map[string]any{"port": 10001, "security": "reality_xtls"})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// unknown node -> 404
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/999", map[string]any{"address": "10.0.0.1", "port": 10001, "security": "reality_xtls"})
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	resp.Body.Close()
+
+	// invalid JSON -> 400
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/1", map[string]any{"port": "not-a-number"})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// bad node id -> 400
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/vless/abc", map[string]any{"address": "10.0.0.1", "port": 10001})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// GET keeps the read-only derivation
+	resp = doJSON(t, http.MethodGet, srv.URL+"/web/api/vless/1", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var got map[string]any
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	resp.Body.Close()
+	assert.Contains(t, got["uri"], "vless://")
+
+	// wrong method -> 405
+	resp = doJSON(t, http.MethodDelete, srv.URL+"/web/api/vless/1", nil)
+	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+	resp.Body.Close()
+
+	// stub path: a State without SetNodeVLESS keeps the stub contract
+	stStub := &mockState{
+		nodes: []types.NodeView{
+			(&types.Node{ID: types.NodeID(1), Hostname: "node-one", GivenName: "node-one"}).View(), //nolint:exhaustruct_v5 // test fixture: only fields under test
+		},
+	}
+	hStub := Handler(cfg, stStub)
+	srvStub := httptest.NewServer(hStub)
+	defer srvStub.Close()
+
+	resp = doJSON(t, http.MethodPost, srvStub.URL+"/web/api/vless/1", map[string]any{"address": "10.0.0.1", "port": 10001, "security": "reality_xtls"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var stubOut map[string]any
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&stubOut))
+	resp.Body.Close()
+	assert.Contains(t, stubOut["status"], "stub")
 }

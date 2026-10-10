@@ -190,15 +190,23 @@ done. It reflects the codebase at the time of writing:
   user creation (`POST /users`), pre-auth key create/expire/delete, API-key
   CRUD (list shows masked prefixes; the raw key is returned exactly once),
   auth approve/reject (SSH-check sessions — registration sessions complete
-  via the node's auth URL) and policy `PUT` plus `POST /policy/check`
-  (validates a draft against live users and nodes). Handlers validate JSON
+  via the node's auth URL), policy `PUT` plus `POST /policy/check`
+  (validates a draft against live users and nodes), a runtime DERP map
+  apply (`POST /derp`, delegating to `state.SetDERPMap` — the relay setup
+  is configurable without editing `derp.yaml` and restarting), and VLESS
+  endpoint settings submission (`POST /vless/{id}`, validated against the
+  transport rules). Handlers validate JSON
   and delegate to `state.State` via type-asserted write interfaces
   (`any(st).(interface{...})`, so this package keeps no state import),
   falling back to stubs for mocks. Every operation is reachable from the
   Web UI itself — per-row actions plus the API Keys, Auth and Policy tabs;
   see the management-parity note in
   [docs/usage/webui.md](../usage/webui.md). Use headscale-ui as the
-  interaction-model reference.
+  interaction-model reference. Remaining goal-#4 gap: the runtime mechanism
+  behind per-node VLESS endpoint overrides (state store, listener rebind,
+  map distribution) and a DERP-change broadcast hook for connected clients
+  — the surfaces above validate and delegate, and the DERP apply is live
+  via the existing `SetDERPMap` path.
 - **VLESS stealth transport implemented via true Reality.**
   `hscontrol/xray/server.go` uses `github.com/xtls/reality` (`reality.Config`,
   `reality.Server`, `reality.DetectPostHandshakeRecordsLens`) to steal the

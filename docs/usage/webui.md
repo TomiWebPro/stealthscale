@@ -12,8 +12,8 @@ Visit `http://<server>:8080/web` or `http://<server>:8080/admin` (alias) — wor
 - **API Keys** — list (masked prefixes only), create (raw key shown once), expire and delete
 - **Auth** — inspect pending authentication requests by auth ID; approve and reject SSH-check sessions (registration sessions are completed via the node's auth URL, not by approve/reject)
 - **Policy** — current ACL/HuJSON policy; validate a draft policy against the live users and nodes without applying it
-- **DERP** — DERP map with `stealth_satisfied` and `shouldIncludeDERP` flags (fail-closed when stealth unsatisfied)
-- **VLESS** — per-node `vless://` URI, UUID, port, Reality dest
+- **DERP** — DERP map with `stealth_satisfied` and `shouldIncludeDERP` flags (fail-closed when stealth unsatisfied); the map can be edited and applied at runtime (`POST /web/api/derp`) — no `derp.yaml` edit or restart needed
+- **VLESS** — per-node `vless://` URI, UUID, port, Reality dest; endpoint settings (address, port, security variant) can be submitted from the UI (`POST /web/api/vless/{id}`)
 - **Election** — coordinator election status; set the primary node in manual mode
 - **Health** — machine API health, DB ping, stealth status
 
@@ -62,13 +62,15 @@ GET    /web/api/policy       # current policy
 PUT    /web/api/policy       # set policy {policy: "HuJSON string"} (also POST)
 POST   /web/api/policy/check # validate a draft policy against live users and nodes without persisting it
 GET    /web/api/derp         # DERP map + stealth_satisfied flag
+POST   /web/api/derp         # apply a full DERP map at runtime {"derpMap": {...}} (bare DERPMap object also accepted) → `state.SetDERPMap`; reported with stealth_satisfied/shouldIncludeDERP so the fail-closed gate is visible
 GET    /web/api/vless/{id}   # VLESS URI for node {id}
+POST   /web/api/vless/{id}   # set node VLESS endpoint settings {address, port, security} — validated against the transport rules (security: none|tls|xtls|reality_xtls, "reality" alias accepted); delegates to `state.SetNodeVLESS` when the runtime per-node override mechanism is available
 GET    /web/api/election     # coordinator election snapshot
 POST   /web/api/election     # set primary node (manual mode)
 GET    /web/api/health       # health + stealth status
 ```
 
-All write endpoints are available under both `/web/api/*` and `/admin/api/*` (alias). They validate JSON and, when the corresponding write method is implemented, delegate to `state.State` (e.g. `CreateUser`, `CreatePreAuthKey`, `SetPolicy`, `DeleteNode`, `SetNodeExpiry`, `RenameNode`, `SetNodeTags`, `SetApprovedRoutes`, `ExpirePreAuthKey`, `DeletePreAuthKey`, `CreateAPIKey`, `ExpireAPIKey`, `DestroyAPIKey`, and the auth-session verdicts). Otherwise they return stub success for coverage. Holepunching via DERP/STUN is exempt from the VLESS requirement and is only offered when stealth is satisfied.
+All write endpoints are available under both `/web/api/*` and `/admin/api/*` (alias). They validate JSON and, when the corresponding write method is implemented, delegate to `state.State` (e.g. `CreateUser`, `CreatePreAuthKey`, `SetPolicy`, `DeleteNode`, `SetNodeExpiry`, `RenameNode`, `SetNodeTags`, `SetApprovedRoutes`, `SetDERPMap`, `ExpirePreAuthKey`, `DeletePreAuthKey`, `CreateAPIKey`, `ExpireAPIKey`, `DestroyAPIKey`, and the auth-session verdicts). Otherwise they return stub success for coverage. Holepunching via DERP/STUN is exempt from the VLESS requirement and is only offered when stealth is satisfied.
 
 ## Serving
 
@@ -79,4 +81,6 @@ The UI is registered via `hscontrol/webui.Register(mux, cfg, state)` in `hscontr
 Terminate TLS at your reverse proxy and forward `/web` and `/` to the StealthScale server. See [Reverse proxy](../ref/integration/reverse-proxy.md) and [TLS](../ref/tls.md).
 
 
-> **Management parity:** node expire/rename/tag/approve-routes, pre-auth key expire/delete, API-key CRUD, auth approve/reject (SSH-check sessions — registration sessions complete via the node's auth URL) and policy `check` are all reachable from the Web UI (see the API list above; implemented in `hscontrol/webui/webui.go`, tabs in `frontend/index.html`). WebUI stores the API key in `localStorage` and sends `Authorization: Bearer` (see `frontend/app.js:ensureAPIKey`). Hardened default requires `enforce && enforce_control` and validates via `ValidateAPIKey` (not presence only).
+> **Management parity:** node expire/rename/tag/approve-routes, pre-auth key expire/delete, API-key CRUD, auth approve/reject (SSH-check sessions — registration sessions complete via the node's auth URL), policy `check`, runtime DERP map apply, and VLESS endpoint settings submission are all reachable from the Web UI (see the API list above; implemented in `hscontrol/webui/webui.go`, tabs in `frontend/index.html`). WebUI stores the API key in `localStorage` and sends `Authorization: Bearer` (see `frontend/app.js:ensureAPIKey`). Hardened default requires `enforce && enforce_control` and validates via `ValidateAPIKey` (not presence only).
+
+> **Propagation notes:** a DERP map applied via `POST /web/api/derp` is live in the control-plane state immediately and is sent to clients with their next map response that carries the DERP map (initial map on connect, a change broadcast, or the periodic `derp.auto_update_enabled` refresh, default every 3h — which re-applies the `derp.yaml`-derived map and overrides a WebUI-applied one until a broadcast hook lands). The stealth fail-closed gate is unaffected: when stealth is unsatisfied the map is stored but withheld from clients. Per-node VLESS endpoint settings are validated and delegated to `state.State.SetNodeVLESS` once the runtime per-node override mechanism lands (tracked as the follow-up work item); until then the endpoint reports the validated settings and the derived endpoint.

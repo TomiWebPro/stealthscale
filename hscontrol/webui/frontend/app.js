@@ -161,12 +161,35 @@ async function loadDERP() {
   try {
     const d = await fetchJSON("/derp");
     document.getElementById("derpBody").textContent = JSON.stringify(d, null, 2);
+    const draft = document.getElementById("derpInput");
+    if (draft && !draft.value) draft.value = JSON.stringify(d.derpMap, null, 2);
     const st = document.getElementById("derpStatus");
     const ok = d.stealth_satisfied;
     st.innerHTML = `<span class="pill ${ok ? "ok" : "err"}">${ok ? "stealth satisfied" : "stealth NOT satisfied — DERP fail-closed"}</span>
       <span class="pill ${d.shouldIncludeDERP ? "ok" : "warn"}">shouldIncludeDERP: ${d.shouldIncludeDERP}</span>`;
   } catch (e) {
     document.getElementById("derpBody").textContent = e.message;
+  }
+}
+// applyDERP POSTs the edited DERP map to the live server. The map
+// replaces the whole relay setup at runtime (no derp.yaml edit, no
+// restart); clients pick it up on their next map response.
+async function applyDERP() {
+  const txt = document.getElementById("derpInput").value;
+  const result = document.getElementById("derpResult");
+  let parsed;
+  try {
+    parsed = JSON.parse(txt);
+  } catch (e) {
+    result.textContent = "Invalid JSON: " + e.message;
+    return;
+  }
+  try {
+    const d = await fetchJSONMethod("/derp", "POST", { derpMap: parsed });
+    result.textContent = "DERP map applied.\n\n" + JSON.stringify(d, null, 2);
+    loadDERP();
+  } catch (e) {
+    result.textContent = "Apply failed: " + e.message;
   }
 }
 async function loadVLESS() {
@@ -177,6 +200,31 @@ async function loadVLESS() {
     document.getElementById("vlessBody").textContent = JSON.stringify(d, null, 2) + "\n\nURI: " + (d.uri || "");
   } catch (e) {
     document.getElementById("vlessBody").textContent = e.message;
+  }
+}
+// applyVLESS POSTs per-node VLESS endpoint settings (address, port,
+// security variant). Settings are validated against the transport
+// rules server-side; the response carries the derived endpoint and
+// its reusable vless:// URI.
+async function applyVLESS() {
+  const id = document.getElementById("vlessId").value.trim();
+  const result = document.getElementById("vlessResult");
+  if (!id) {
+    result.textContent = "Enter a node ID first.";
+    return;
+  }
+  const port = parseInt(document.getElementById("vlessPort").value, 10);
+  const body = {
+    address: document.getElementById("vlessAddress").value.trim(),
+    port: Number.isNaN(port) ? 0 : port,
+    security: document.getElementById("vlessSecurity").value,
+  };
+  try {
+    const d = await fetchJSONMethod("/vless/" + encodeURIComponent(id), "POST", body);
+    result.textContent = JSON.stringify(d, null, 2) + "\n\nURI: " + (d.endpoint?.uri || "");
+    loadVLESS();
+  } catch (e) {
+    result.textContent = "Apply failed: " + e.message;
   }
 }
 async function loadElection() {

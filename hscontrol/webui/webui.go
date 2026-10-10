@@ -365,7 +365,7 @@ func Handler(cfg *types.Config, st State) http.Handler {
 		}
 	}
 	apiDERP := func(w http.ResponseWriter, r *http.Request) { handleDERP(w, r, cfg, st) }
-	apiVLESS := func(w http.ResponseWriter, r *http.Request) { handleVLESS(w, r, cfg) }
+	apiVLESS := func(w http.ResponseWriter, r *http.Request) { handleVLESS(w, r, cfg, st) }
 	apiHealth := func(w http.ResponseWriter, r *http.Request) { handleHealth(w, r, cfg, st) }
 	apiElection := func(w http.ResponseWriter, r *http.Request) { handleElection(w, r, cfg, st) }
 
@@ -522,25 +522,145 @@ func handlePolicy(w http.ResponseWriter, r *http.Request, st State) {
 	writeJSON(w, map[string]any{"policy": pol.Data})
 }
 
+// handleDERP serves the DERP map surface. GET returns the live map
+// with the stealth-gating flags; POST applies a full DERP map at
+// runtime (goal #4: the relay setup is configurable from the Web UI
+// without editing derp.yaml and restarting), delegating to
+// state.State.SetDERPMap when the State implements it.
 func handleDERP(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State) {
-	dm := st.DERPMap()
-	// Use view's MarshalJSON directly — avoids AsStruct clone per request
-	// (low-RPS but respects AGENTS.md view rule). See tailscale/tailcfg_view.go:1676.
-	stealthSatisfied := derp.IsStealthSatisfied(&cfg.XRay)
-	shouldInclude := derp.ShouldIncludeDERP(cfg)
+	switch r.Method {
+	case http.MethodGet:
+		dm := st.DERPMap()
+		// Use view's MarshalJSON directly — avoids AsStruct clone per request
+		// (low-RPS but respects AGENTS.md view rule). See tailscale/tailcfg_view.go:1676.
+		stealthSatisfied := derp.IsStealthSatisfied(&cfg.XRay)
+		shouldInclude := derp.ShouldIncludeDERP(cfg)
+		writeJSON(w, map[string]any{
+			"derpMap":           dm,
+			"stealth_satisfied": stealthSatisfied,
+			"shouldIncludeDERP": shouldInclude,
+			"xray": map[string]any{
+				"enabled":  cfg.XRay.Enabled,
+				"security": cfg.XRay.Security,
+				"dest":     cfg.XRay.Reality.Dest,
+			},
+		})
+	case http.MethodPost:
+		applyDERPMap(w, r, cfg, st)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// parseDERPMapUpdate decodes an incoming DERP map update. Both the
+// wrapped form {"derpMap": {...}} and a bare DERPMap object
+// ({"regions": {...}, ...}) are accepted so operators can paste the
+// map exactly as GET /derp returns it (under "derpMap") or as a
+// stock derp.yaml-shaped JSON document.
+func parseDERPMapUpdate(body []byte) (*tailcfg.DERPMap, error) {
+	var req struct {
+		DERPMap *tailcfg.DERPMap `json:"derpMap"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
+	}
+	if req.DERPMap != nil {
+		return req.DERPMap, nil
+	}
+	var dm tailcfg.DERPMap
+	if err := json.Unmarshal(body, &dm); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
+	}
+	return &dm, nil
+}
+
+// validateDERPMap checks the structural invariants a DERP map must
+// hold before it is applied: region keys are positive and match the
+// region's own RegionID, and every node is named, belongs to its
+// region, and is dialable (hostname or forced IP). An empty region
+// set is valid — it disables DERP relays.
+func validateDERPMap(dm *tailcfg.DERPMap) error {
+	if dm == nil {
+		return errors.New("missing derp map")
+	}
+	for id, region := range dm.Regions {
+		if id <= 0 {
+			return fmt.Errorf("invalid region id %d: must be positive", id)
+		}
+		if region == nil {
+			return fmt.Errorf("region %d: nil region", id)
+		}
+		if region.RegionID != id {
+			return fmt.Errorf("region %d: RegionID %d does not match the map key", id, region.RegionID)
+		}
+		for _, node := range region.Nodes {
+			if node == nil {
+				return fmt.Errorf("region %d: nil node", id)
+			}
+			if node.Name == "" {
+				return fmt.Errorf("region %d: node without a name", id)
+			}
+			if node.RegionID != id {
+				return fmt.Errorf("region %d: node %q has RegionID %d", id, node.Name, node.RegionID)
+			}
+			if node.HostName == "" && node.IPv4 == "" && node.IPv6 == "" {
+				return fmt.Errorf("region %d: node %q has no hostname or IP", id, node.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// applyDERPMap validates an incoming DERP map and applies it to the
+// live state via state.State.SetDERPMap (the same mechanism the
+// periodic DERP ticker and config reload use). The stealth
+// fail-closed gate is unaffected: when stealth is not satisfied the
+// map is stored but still withheld from clients (shouldIncludeDERP
+// in the response reports the effective state).
+func applyDERPMap(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	dm, err := parseDERPMapUpdate(body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateDERPMap(dm); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Delegate to state.State.SetDERPMap when available (production
+	// *state.State implements it); mocks keep the stub contract.
+	if ws, ok := any(st).(interface{ SetDERPMap(*tailcfg.DERPMap) }); ok {
+		ws.SetDERPMap(dm)
+		writeDERPApplied(w, cfg, dm, "derp map applied")
+		return
+	}
+	writeDERPApplied(w, cfg, dm, "derp map applied (stub — wire to state.State.SetDERPMap)")
+}
+
+// writeDERPApplied reports the outcome of a DERP map update together
+// with the stealth-gating flags so the operator sees whether the map
+// will actually be offered to clients right now (fail-closed).
+func writeDERPApplied(w http.ResponseWriter, cfg *types.Config, dm *tailcfg.DERPMap, status string) {
 	writeJSON(w, map[string]any{
+		"status":            status,
 		"derpMap":           dm,
-		"stealth_satisfied": stealthSatisfied,
-		"shouldIncludeDERP": shouldInclude,
-		"xray": map[string]any{
-			"enabled":  cfg.XRay.Enabled,
-			"security": cfg.XRay.Security,
-			"dest":     cfg.XRay.Reality.Dest,
-		},
+		"stealth_satisfied": derp.IsStealthSatisfied(&cfg.XRay),
+		"shouldIncludeDERP": derp.ShouldIncludeDERP(cfg),
 	})
 }
 
-func handleVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config) {
+// handleVLESS serves the per-node VLESS endpoint surface. GET
+// derives and returns the node's endpoint (UUID/port/URI); POST
+// configures the endpoint settings (address, port, security
+// variant), validating them against the same rules the transport
+// enforces and delegating to state.State.SetNodeVLESS when the
+// runtime per-node override mechanism is available.
+func handleVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State) {
 	// Expect /web/api/vless/{id} or /admin/api/vless/{id}
 	// Extract id from path suffix
 	path := r.URL.Path
@@ -566,18 +686,76 @@ func handleVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config) {
 		return
 	}
 	nodeID := types.NodeID(nodeIDInt)
-	sec := cfg.XRay.Security
+
+	switch r.Method {
+	case http.MethodGet:
+		sec := cfg.XRay.Security
+		if sec == "" {
+			sec = "reality_xtls"
+		}
+		if sec == "reality" {
+			sec = "reality_xtls"
+		}
+		vlessCfg := &xray.VLESSConfig{
+			ID:        xray.NodeUUID(nodeID, cfg.XRay.Secret),
+			Network:   "tcp",
+			Address:   cfg.XRay.ListenAddr,
+			Port:      xray.NodePort(nodeID, cfg.XRay.Secret, cfg.XRay.BaseListenPort, cfg.XRay.MaxListenPort),
+			Security:  sec,
+			Timeout:   cfg.XRay.Timeout,
+			Dest:      cfg.XRay.Reality.Dest,
+			FP:        cfg.XRay.UTLSFingerprint,
+			PublicKey: cfg.XRay.Reality.PublicKey,
+			ShortID:   cfg.XRay.Reality.ShortID,
+		}
+		writeJSON(w, map[string]any{
+			"nodeID":  nodeID.String(),
+			"uuid":    vlessCfg.ID,
+			"port":    vlessCfg.Port,
+			"uri":     vlessCfg.URI(),
+			"config":  vlessCfg,
+			"address": vlessCfg.Address,
+		})
+	case http.MethodPost:
+		applyNodeVLESS(w, r, cfg, st, nodeID)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// applyNodeVLESS validates per-node VLESS endpoint settings and
+// delegates to state.State.SetNodeVLESS when the runtime override
+// mechanism is available. Settings follow the transport's own rules
+// (xray.VLESSConfig.Validate): a non-empty address, a port within
+// 1-65535, and a security variant of none/tls/xtls/reality_xtls
+// ("reality" is accepted as the reality_xtls alias, as everywhere
+// else in the codebase).
+func applyNodeVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State, nodeID types.NodeID) {
+	var req struct {
+		Address  string `json:"address"`
+		Port     int    `json:"port"`
+		Security string `json:"security"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if st.ListNodes(nodeID).Len() == 0 {
+		http.Error(w, "node not found", http.StatusNotFound)
+		return
+	}
+	sec := strings.TrimSpace(req.Security)
 	if sec == "" {
 		sec = "reality_xtls"
 	}
 	if sec == "reality" {
 		sec = "reality_xtls"
 	}
-	vlessCfg := &xray.VLESSConfig{
+	endpoint := &xray.VLESSConfig{
 		ID:        xray.NodeUUID(nodeID, cfg.XRay.Secret),
 		Network:   "tcp",
-		Address:   cfg.XRay.ListenAddr,
-		Port:      xray.NodePort(nodeID, cfg.XRay.Secret, cfg.XRay.BaseListenPort, cfg.XRay.MaxListenPort),
+		Address:   strings.TrimSpace(req.Address),
+		Port:      req.Port,
 		Security:  sec,
 		Timeout:   cfg.XRay.Timeout,
 		Dest:      cfg.XRay.Reality.Dest,
@@ -585,14 +763,48 @@ func handleVLESS(w http.ResponseWriter, r *http.Request, cfg *types.Config) {
 		PublicKey: cfg.XRay.Reality.PublicKey,
 		ShortID:   cfg.XRay.Reality.ShortID,
 	}
+	if err := endpoint.Validate(); err != nil {
+		http.Error(w, "invalid VLESS endpoint settings: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Delegate to state.State.SetNodeVLESS once the runtime
+	// per-node endpoint override mechanism lands (tracked as the
+	// follow-up work item from the goal-#4 gap). Until then the
+	// surface validates the settings against the transport rules
+	// and reports the stub status, mirroring the other optional
+	// write delegation in this package.
+	if ws, ok := any(st).(interface {
+		SetNodeVLESS(types.NodeID, *xray.VLESSConfig) error
+	}); ok {
+		if err := ws.SetNodeVLESS(nodeID, endpoint); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"status":   "vless endpoint set",
+			"nodeID":   nodeID.String(),
+			"endpoint": vlessEndpointView(endpoint),
+		})
+		return
+	}
 	writeJSON(w, map[string]any{
-		"nodeID":  nodeID.String(),
-		"uuid":    vlessCfg.ID,
-		"port":    vlessCfg.Port,
-		"uri":     vlessCfg.URI(),
-		"config":  vlessCfg,
-		"address": vlessCfg.Address,
+		"status":   "vless endpoint settings validated (stub — wire to state.State.SetNodeVLESS)",
+		"nodeID":   nodeID.String(),
+		"endpoint": vlessEndpointView(endpoint),
 	})
+}
+
+// vlessEndpointView renders the operator-facing endpoint settings
+// with the derived UUID and the reusable vless:// URI.
+func vlessEndpointView(c *xray.VLESSConfig) map[string]any {
+	return map[string]any{
+		"uuid":     c.ID,
+		"network":  c.Network,
+		"address":  c.Address,
+		"port":     c.Port,
+		"security": c.Security,
+		"uri":      c.URI(),
+	}
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State) {

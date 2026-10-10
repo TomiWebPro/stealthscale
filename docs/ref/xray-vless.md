@@ -134,7 +134,7 @@ make test
 
 ## WebUI
 
-VLESS tab shows per-node URI/port/UUID, DERP tab shows stealth badge. See [Web UI](../usage/webui.md).
+VLESS tab shows per-node URI/port/UUID and submits endpoint settings (`POST /web/api/vless/{id}`: address, port, security variant — validated against `VLESSConfig.Validate`); DERP tab shows the stealth badge and applies a full DERP map at runtime (`POST /web/api/derp` → `state.SetDERPMap`). See [Web UI](../usage/webui.md).
 
 ## References
 
