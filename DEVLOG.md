@@ -911,3 +911,9 @@ Format:
 - issue marked done (`<!-- status: done -->` + resolution summary) and moved to issues/closed/
 - commit: TBD (docs-only; --no-verify: prek shells out to nix, absent in this env — equivalent checks run directly above)
 - note: DEVLOG.md committed wholesale — its uncommitted entries (14:07/14:45/15:46 ss-maintain cycles) have code commits already in HEAD (cc59d86, 4745102, 208d7f6), so append-only ordering forbids staging this entry alone; other dirty files (CHANGELOG.md, docs/ref/api.md, docs/usage/webui.md, untracked cmd/stealthscale/cli/nodes_vless_test.go) belong to earlier runs — left untouched per ownership rules
+
+## 2026-10-10 16:11 UTC — stealth-builder
+
+- concurrency guard: /tmp/ss/agent.lock held by ss-maintain (16:03 UTC, ~8 min old, < 15 min threshold) — skipped cycle
+- also: open issue 202610101302-vless-per-node-endpoint-override-mechanism.md (P2) still queued in open/ — left for the next eligible cycle
+- note: dirty tree (CHANGELOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, untracked cmd/stealthscale/cli/nodes_vless_test.go) belongs to concurrent runs — left untouched per ownership rules
