@@ -195,15 +195,19 @@ only used when stealth is satisfied (`xray.stealth.enforce: true`, fail-closed).
 
 Without a pre-auth key, `stscale up` registers interactively in the same
 command: it prints the node's registration URL and polls the coordinator for up
-to 10 minutes while you complete it. That URL embeds the auth ID and is the only
-handle on the pending session: open it in a browser (the web provider renders
-the exact `stealthscale auth register --auth-id <id> --user <user>` command to
-run on the coordinator; the OIDC provider shows a confirmation page), or copy
-the auth ID out of the URL and run that command yourself — `stscale up` finishes
-the join as soon as the verdict arrives (a rejection or an expired session
-restarts the registration and prints the new URL). The `auth approve`/`auth
-reject` commands decide SSH-check sessions only — registration sessions are
-completed via the registration URL.
+to 10 minutes while you complete it. That URL is the only handle on the pending
+session: open it in a browser (the web provider renders the exact
+`stealthscale auth register --auth-id <id> --user <user>` command to run on the
+coordinator; the OIDC provider shows a confirmation page), or copy the URL
+itself and run `stscale auth register --user <USER> '<registration URL>'` on the
+coordinator — the auth ID is parsed out of the URL path, no manual extraction
+(the bare `--auth-id` form still works) — and `stscale up` finishes the join as
+soon as the verdict arrives (a rejection or an expired session restarts the
+registration and prints the new URL). The `auth approve`/`auth reject` commands
+decide SSH-check sessions only — registration sessions are completed via the
+registration URL — and accept the same input: the full URL
+`stscale auth approve '<auth URL>'` copied verbatim from the SSH session output,
+or the bare `--auth-id`.
 
 The coordinator is also a node: running `stscale serve` on any device makes it
 both a node and a coordinator (on by default). Point another device at it with

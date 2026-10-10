@@ -45,10 +45,13 @@ tailscale up --login-server <YOUR_STSCALE_URL> --advertise-tags= --force-reauth
 ```
 
 Usually, a browser window with further instructions is opened. This page explains how to complete the registration on
-your StealthScale server and it also prints the Auth ID required to approve the node:
+your StealthScale server and prints the registration URL (which embeds the auth ID) required to approve the node:
 
 ```console
-stscale auth register --user <USER> --auth-id <AUTH_ID>
+stscale auth register --user <USER> 'https://<YOUR_STSCALE_URL>/register/<AUTH_ID>'
 ```
+
+The command accepts the registration URL copied verbatim from the client output,
+or the bare auth ID: `stscale auth register --user <USER> --auth-id <AUTH_ID>`.
 
 All previously assigned tags get removed and the node is now owned by the user specified in the above command.

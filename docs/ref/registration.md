@@ -61,8 +61,12 @@ stscale users create <USER>
 
     ```console
     tailscale up --login-server <YOUR_STSCALE_URL>  # only when enforce_control:false
-    stscale auth register --user <USER> --auth-id <AUTH_ID>
+    stscale auth register --user <USER> 'https://<YOUR_STSCALE_URL>/register/<AUTH_ID>'
     ```
+
+    `auth register` accepts the registration URL `tailscale up` prints, copied
+    verbatim (the auth ID is parsed out of the URL path), or the bare
+    `--auth-id <AUTH_ID>` form.
 
 === "Tagged devices — unified `stscale`"
 
@@ -86,7 +90,7 @@ stscale users create <USER>
 
     ```console
     tailscale up --login-server <YOUR_STSCALE_URL> --advertise-tags tag:server
-    stscale auth register --user <USER> --auth-id <AUTH_ID>
+    stscale auth register --user <USER> 'https://<YOUR_STSCALE_URL>/register/<AUTH_ID>'
     ```
 
     Ownership transfers to `tagged-devices`; check `stscale nodes list`.
