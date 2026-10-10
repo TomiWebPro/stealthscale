@@ -567,3 +567,8 @@ Format:
   docs/usage/webui.md, untracked
   cmd/stealthscale/cli/nodes_vless_test.go) belongs to
   earlier runs — left untouched per ownership rules
+
+## 2026-10-10 08:44 UTC — stealth-builder
+
+- concurrency guard: /tmp/ss/agent.lock held by ss-maintain (~6 min old, < 15 min threshold) — skipped cycle
+- open issue 202610100832-up-interactive-registration-unreachable (P2) still queued; no files touched
