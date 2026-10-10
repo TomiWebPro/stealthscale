@@ -503,7 +503,7 @@ Format:
   after commit (still owned by this run)
 - build: `go build ./...` green (GOTOOLCHAIN=go1.26.7)
 - tests: full `GOTOOLCHAIN=go1.26.7 go test -short
-  -count=1 ./hscontrol/... ./cmd/...` green at cycle start
+-count=1 ./hscontrol/... ./cmd/...` green at cycle start
   (27 pkgs ok, 0 fail; hscontrol 214s, servertest 232s,
   mapper 44s); re-ran ./cmd/stealthscale/... with the fix
   green; race skipped (needs cgo, absent in this env)
@@ -578,6 +578,7 @@ Format:
 - concurrency guard: /tmp/ss/agent.lock held by ss-maintain (08:50 UTC, ~6 min old, < 15 min threshold) — skipped cycle; open issue 202610100832-up-interactive-registration-unreachable.md (P2, `stscale up` never attempts interactive registration) remains queued in open/ for a later cycle
 
 ## 2026-10-10 08:50 UTC — ss-maintain
+
 - concurrency guard: no lock held at start; wrote "ss-maintain 2026-10-10 08:50 UTC" to /tmp/ss/agent.lock, removed at end of cycle
 - build: go build ./... green
 - tests: go test -short ./hscontrol/... ./cmd/... — 3 failures, all the known go1.27.1 ambient-toolchain strictness (closed issue 202610082015, tailcfg.SSHAction `format:nano` tag): hscontrol/types/testcapture TestWriteReadRoundtrip_SSH + TestWrite_SSH_StatsUseSSHRules and hscontrol/servertest TestSSHCheckReDelegatesWhenSessionMissing. Verified all three pass under the Makefile-pinned GOTOOLCHAIN=go1.26.7 — toolchain issue, not code bugs; everything else green (all of ./cmd/... included)
@@ -604,6 +605,7 @@ Format:
 - commit: TBD (--no-verify: prek shells out to nix which is absent in this env — equivalent checks run directly above)
 
 ## 2026-10-10 10:08 UTC — ss-maintain
+
 - concurrency guard: no lock held at start; wrote "ss-maintain 2026-10-10 09:44 UTC" to /tmp/ss/agent.lock, removed at end of cycle
 - build: GOTOOLCHAIN=go1.26.7 go build ./... green
 - tests: GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/... — all green (the 3 known go1.27.1 ambient-toolchain strictness failures from issue 202610082015 do not occur under the Makefile-pinned toolchain; re-confirmed toolchain issue, not code bugs)
@@ -615,6 +617,7 @@ Format:
 - devlog: left uncommitted per protocol (daily-push job handles it; committing it wholesale would risk sweeping in a concurrent agent's uncommitted entry)
 
 ## 2026-10-10 10:10 UTC — stealth-builder
+
 - concurrency guard passed (no /tmp/ss/agent.lock held); no open issues (open/ and in-progress/ empty) — cycle aborted (queue empty)
 
 ## 2026-10-10 10:17 UTC — stealth-builder
@@ -673,6 +676,7 @@ Format:
 - commit: devlog-only (this entry); --no-verify (prek shells out to nix, absent in this env)
 
 ## 2026-10-10 11:13 UTC — ss-maintain
+
 - concurrency guard: passed (no lock held at start); wrote "ss-maintain 2026-10-10T11:00:15Z" to /tmp/ss/agent.lock, kept fresh with touch before the commit, removed at end of cycle while still owned by this run (a concurrent stealth-builder devlog commit f722f25 landed mid-cycle; my commit contains only my file)
 - build: GOTOOLCHAIN=go1.26.7 go build ./... green
 - tests: GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/... — all 27 packages green (hscontrol 215s, servertest 240s, mapper 39s, state 21s, db 11s, cli 1.3s); the 3 known go1.27.1 ambient-toolchain strictness failures (closed issue 202610082015) do not occur under the Makefile-pinned toolchain; race skipped (needs cgo, absent in this env)
@@ -739,6 +743,7 @@ Format:
   ss-maintain run — left untouched per ownership rules
 
 ## 2026-10-10 12:02 UTC — ss-maintain
+
 - concurrency guard: passed (no lock held at start); wrote "ss-maintain 2026-10-10 11:53:48 UTC" to /tmp/ss/agent.lock, kept fresh, removed at end of cycle while still owned by this run
 - build: GOTOOLCHAIN=go1.26.7 go build ./... green
 - tests: GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/... — all 32 packages green (hscontrol 217s, servertest 240s, mapper 39s, state 21s, db 11s, cli 1.2s, webui 0.06s); race skipped (needs cgo, absent in this env)
@@ -823,11 +828,11 @@ Format:
 - issue: 202610101304-webui-election-mode-unsettable.md (P2, feature; goal #4 — "coordinator election ... must be configurable from the Web UI") — claimed from issues/open/, implemented, closed to issues/closed/ with `<!-- status: done -->` and a resolution summary
 - priority pick: three open P2 issues (derp-runtime-update-hardening, vless-per-node-endpoint-override-mechanism, webui-election-mode-unsettable). This one is the highest-priority within the class: the only issue where a promised goal-#4 flow is completely unreachable — the mode is frozen at auto for the process lifetime, the Election tab dead-ends, and docs/usage/webui.md:17,69 documented a flow that could not occur (an active docs/code contradiction under the DOCS RULE). The other two are hardening/mechanism follow-ups on surfaces that already partially work, and they touch the performance-critical mapper broadcast path and the live xray transport respectively
 - implementation (the issue's open design decisions, resolved):
-  * ElectionMode location: canonical definition moved to hscontrol/types/const.go; hscontrol/state re-exports it as type aliases (existing state.ElectionMode references keep compiling) — the webui type-asserted write interface names types.ElectionMode, so webui keeps no state import and there is no import cycle (the issue's alternative was a raw-string interface; the typed alias is safer and matches the other write interfaces)
-  * Persistence: mode is runtime state only, like the primary (no config section added — parity with SetElectionPrimary)
-  * ElectionState.SetMode now clears any fixed primary when switching to auto (in auto mode any node may become coordinator, so a stored primary would be stale)
-  * state.State gains SetElectionMode; webui handleElection POST validates mode against types.ElectionModeAuto/ElectionModeManual (400 on unknown values), applies the primary first and the mode switch second (the switch is the final word), delegates via any(st).(interface{ SetElectionMode(types.ElectionMode) }) and SetElectionPrimary with the usual stub fallback, and reports the resulting live snapshot (mode/primary_node/has_primary) in the response; a POST without "mode" keeps the legacy primary-only update (including clear-on-empty)
-  * Frontend: the Election tab gains an Auto/Manual toggle (the active mode is disabled); switching to manual asks for the primary node ID in the same step (manual mode never sits without a primary); "Set primary (manual)" remains available in manual mode
+  - ElectionMode location: canonical definition moved to hscontrol/types/const.go; hscontrol/state re-exports it as type aliases (existing state.ElectionMode references keep compiling) — the webui type-asserted write interface names types.ElectionMode, so webui keeps no state import and there is no import cycle (the issue's alternative was a raw-string interface; the typed alias is safer and matches the other write interfaces)
+  - Persistence: mode is runtime state only, like the primary (no config section added — parity with SetElectionPrimary)
+  - ElectionState.SetMode now clears any fixed primary when switching to auto (in auto mode any node may become coordinator, so a stored primary would be stale)
+  - state.State gains SetElectionMode; webui handleElection POST validates mode against types.ElectionModeAuto/ElectionModeManual (400 on unknown values), applies the primary first and the mode switch second (the switch is the final word), delegates via any(st).(interface{ SetElectionMode(types.ElectionMode) }) and SetElectionPrimary with the usual stub fallback, and reports the resulting live snapshot (mode/primary_node/has_primary) in the response; a POST without "mode" keeps the legacy primary-only update (including clear-on-empty)
+  - Frontend: the Election tab gains an Auto/Manual toggle (the active mode is disabled); switching to manual asks for the primary node ID in the same step (manual mode never sits without a primary); "Set primary (manual)" remains available in manual mode
 - tests: TestStateSetElectionMode + the auto-clears-primary invariant in TestElectionState (hscontrol/state/election_test.go); TestWebUI_ElectionMode (switch+primary in one step, mode-only keeps the primary, auto-switch clears it, legacy node_id-only form, empty-body clear, invalid mode 400 with no state change, invalid JSON 400, 405, stub contract) and writeMockState gains SetElectionMode/SetElectionPrimary/live ElectionSnapshot pinning the delegation contract (hscontrol/webui/webui_write_test.go). Mutation-validated: disabling the SetElectionMode delegation fails TestWebUI_ElectionMode (the mode-decoded-then-ignored regression); dropping the auto-clears-primary in ElectionState.SetMode fails the state tests
 - build/tests: GOTOOLCHAIN=go1.26.7 go build ./... green; go test -count=1 -short green for ./hscontrol/types/ ./hscontrol/state/ ./hscontrol/webui/; gofmt + go vet clean on the changed packages (race unavailable: no cgo in this env)
 - docs (DOCS RULE, same commit): docs/usage/webui.md (features bullet, POST /web/api/election API line, delegation list gains SetElectionMode/SetElectionPrimary) and docs/stealthscale/overview.md (Web UI surface enumeration gains the election mode switch; the Election tab listed among the reachable tabs) — the previously contradicted claims (webui.md:17,69) are now accurate. Only my hunks were staged in those two files (git apply of a filtered patch): the pre-existing mdformat/prettier hunks from interrupted runs (overview.md list renumbering + line rewrap; webui.md blank-line deletion) remain unstaged in the working tree per ownership rules
@@ -917,3 +922,9 @@ Format:
 - concurrency guard: /tmp/ss/agent.lock held by ss-maintain (16:03 UTC, ~8 min old, < 15 min threshold) — skipped cycle
 - also: open issue 202610101302-vless-per-node-endpoint-override-mechanism.md (P2) still queued in open/ — left for the next eligible cycle
 - note: dirty tree (CHANGELOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, untracked cmd/stealthscale/cli/nodes_vless_test.go) belongs to concurrent runs — left untouched per ownership rules
+
+## 2026-10-10 16:15 UTC — stealth-builder
+
+- concurrency guard: /tmp/ss/agent.lock held by ss-maintain (16:03 UTC, ~12 min old, < 15 min threshold) — skipped cycle
+- open issue `202610101302-vless-per-node-endpoint-override-mechanism.md` (P2) still queued in open/ — left for the next eligible cycle
+- note: dirty tree (CHANGELOG.md, docs/ref/api.md, docs/stealthscale/overview.md, docs/usage/webui.md, untracked cmd/stealthscale/cli/nodes_vless_test.go) belongs to concurrent runs — left untouched per ownership rules; DEVLOG.md left uncommitted per the 06:57 precedent (daily-push job handles it)
