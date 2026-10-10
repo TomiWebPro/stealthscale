@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -372,8 +373,11 @@ machine-readable structured output.`,
 		}
 
 		// Warn when listen_addr is 0.0.0.0 — URI will contain 0.0.0.0 which is not reachable externally.
+		// The warning goes to stderr: --one-line and --output json must stay
+		// pipe-clean on stdout, because the URI/JSON there is meant for
+		// $(...) capture (see the one-command join in docs/stealthscale/clients.md).
 		if config.Address == "0.0.0.0" || config.Address == "::" || config.Address == "" {
-			pterm.Warning.Printf("URI contains %q — set xray.listen_addr to public IP/FQDN or use --address override; 0.0.0.0 is not dialable from clients\n", config.Address)
+			pterm.Warning.WithWriter(os.Stderr).Printf("URI contains %q — set xray.listen_addr to public IP/FQDN or use --address override; 0.0.0.0 is not dialable from clients\n", config.Address)
 		}
 
 		// --one-line: emit only the raw vless:// URI, no headers or formatting.

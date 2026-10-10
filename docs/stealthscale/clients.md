@@ -59,6 +59,11 @@ vless_uri="$(stscale nodes vless 1 --one-line)"
 stscale up --coordinator https://ctl.example.com --authkey <key> --vless-uri "$vless_uri"
 ```
 
+Warnings (e.g. a non-dialable `xray.listen_addr` like `0.0.0.0`)
+print to **stderr**, so `--one-line` and `--output json` stay
+pipe-clean on stdout — the command substitution above captures
+only the URI.
+
 ## What the client needs
 
 Every node must be told three things before it can talk to the coordinator:
