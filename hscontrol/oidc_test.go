@@ -3,6 +3,7 @@ package hscontrol
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
+	"golang.org/x/oauth2"
 )
 
 func TestDoOIDCAuthorization(t *testing.T) {
@@ -516,4 +518,98 @@ func TestDoOIDCAuthorizationUnverifiedEmailPassesWithoutEmailTests(t *testing.T)
 	var httpErr HTTPError
 	require.ErrorAs(t, err, &httpErr)
 	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+}
+
+// TestOIDCCallbackStateCSRFRejection pins the /oidc/callback
+// CSRF boundary — the first trust check in OIDCCallbackHandler.
+// A forged callback, or a real one whose state cookie was lost
+// (a stripping proxy, a browser clearing cookies mid-flow), must
+// be rejected before the authorization code is exchanged with the
+// IdP. The fake token endpoint counts requests so the test can
+// prove the exchange is never attempted for a missing or
+// mismatched state cookie, while a matching state passes the
+// boundary and reaches the exchange (which fails against the
+// fake endpoint — proving the flow proceeded past the check).
+// Regression guard: reordering the handler to exchange the code
+// before validating the state cookie would let a forged callback
+// hit the IdP (and consume a code) before being rejected.
+func TestOIDCCallbackStateCSRFRejection(t *testing.T) {
+	var tokenRequests atomic.Int64
+
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		tokenRequests.Add(1)
+		http.Error(w, "no tokens", http.StatusBadRequest)
+	}))
+	t.Cleanup(tokenServer.Close)
+
+	newProvider := func() *AuthProviderOIDC {
+		return &AuthProviderOIDC{
+			h:            nil,
+			serverURL:    "",
+			cfg:          oidcTestConfig(false),
+			authCache:    expirable.NewLRU[string, AuthInfo](authCacheMaxEntries, nil, authCacheExpiration),
+			oidcProvider: nil,
+			oauth2Config: &oauth2.Config{ //nolint:exhaustruct_v5 // test fixture: only the token endpoint matters
+				ClientID:     "test-client",
+				ClientSecret: "test-secret",
+				Endpoint:     oauth2.Endpoint{TokenURL: tokenServer.URL}, //nolint:exhaustruct_v5 // test fixture: only TokenURL matters
+			},
+		}
+	}
+
+	// The state must be at least cookieNamePrefixLen characters
+	// so getCookieName does not truncate; a fixed value keeps the
+	// cookie name deterministic.
+	const state = "0123456789abcdef0123456789abcdef"
+
+	callbackRequest := func(cookieValue string) *http.Request {
+		req := httptest.NewRequestWithContext(
+			t.Context(), http.MethodGet,
+			"/oidc/callback?code=test-code&state="+state, nil)
+		if cookieValue != "" {
+			req.AddCookie(&http.Cookie{ //nolint:gosec,exhaustruct_v5 // test fixture cookie; never leaves the test process
+				Name:     getCookieName("state", state),
+				Value:    cookieValue,
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+			})
+		}
+
+		return req
+	}
+
+	t.Run("missing state cookie", func(t *testing.T) {
+		a := newProvider()
+		w := httptest.NewRecorder()
+		a.OIDCCallbackHandler(w, callbackRequest(""))
+
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Zero(t, tokenRequests.Load(),
+			"a missing state cookie must be rejected before the token exchange")
+	})
+
+	t.Run("state cookie mismatch", func(t *testing.T) {
+		a := newProvider()
+		w := httptest.NewRecorder()
+		a.OIDCCallbackHandler(w, callbackRequest("ffffffffffffffffffffffffffffffff"))
+
+		assert.Equal(t, http.StatusForbidden, w.Result().StatusCode)
+		assert.Zero(t, tokenRequests.Load(),
+			"a mismatched state cookie must be rejected before the token exchange")
+	})
+
+	t.Run("matching state reaches the token exchange", func(t *testing.T) {
+		a := newProvider()
+		w := httptest.NewRecorder()
+		a.OIDCCallbackHandler(w, callbackRequest(state))
+
+		// The exchange runs and fails against the fake endpoint,
+		// surfacing as a 403 "invalid code" — proving the request
+		// passed the CSRF boundary. The request count is asserted
+		// positive (not exact) because the oauth2 library probes
+		// auth-style and may retry the exchange.
+		assert.Equal(t, http.StatusForbidden, w.Result().StatusCode)
+		assert.Positive(t, tokenRequests.Load(),
+			"a matching state cookie must proceed to the token exchange")
+	})
 }
