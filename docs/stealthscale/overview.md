@@ -193,13 +193,18 @@ done. It reflects the codebase at the time of writing:
   via the node's auth URL), policy `PUT` plus `POST /policy/check`
   (validates a draft against live users and nodes), a runtime DERP map
   apply (`POST /derp`, delegating to `state.SetDERPMap` — the relay setup
-  is configurable without editing `derp.yaml` and restarting), and VLESS
+  is configurable without editing `derp.yaml` and restarting), coordinator
+  election mode switching (`POST /election`, auto/manual plus a fixed
+  primary, delegating to `state.SetElectionMode`/`state.SetElectionPrimary`
+  — switching to auto clears the fixed primary), and VLESS
   endpoint settings submission (`POST /vless/{id}`, validated against the
   transport rules). Handlers validate JSON
   and delegate to `state.State` via type-asserted write interfaces
   (`any(st).(interface{...})`, so this package keeps no state import),
   falling back to stubs for mocks. Every operation is reachable from the
-  Web UI itself — per-row actions plus the API Keys, Auth and Policy tabs;
+  Web UI itself — per-row actions plus the API Keys, Auth, Policy and
+  Election tabs (the Election tab toggles the coordinator election mode
+  and sets the fixed primary);
   see the management-parity note in
   [docs/usage/webui.md](../usage/webui.md). Use headscale-ui as the
   interaction-model reference. Remaining goal-#4 gap: the runtime mechanism

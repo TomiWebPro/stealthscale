@@ -14,7 +14,7 @@ Visit `http://<server>:8080/web` or `http://<server>:8080/admin` (alias) — wor
 - **Policy** — current ACL/HuJSON policy; validate a draft policy against the live users and nodes without applying it
 - **DERP** — DERP map with `stealth_satisfied` and `shouldIncludeDERP` flags (fail-closed when stealth unsatisfied); the map can be edited and applied at runtime (`POST /web/api/derp`) — no `derp.yaml` edit or restart needed
 - **VLESS** — per-node `vless://` URI, UUID, port, Reality dest; endpoint settings (address, port, security variant) can be submitted from the UI (`POST /web/api/vless/{id}`)
-- **Election** — coordinator election status; set the primary node in manual mode
+- **Election** — coordinator election status; switch between auto (any node may become coordinator) and manual (fixed primary) mode, and set the primary node in manual mode (`POST /web/api/election`)
 - **Health** — machine API health, DB ping, stealth status
 
 Dark theme matches the scheduler WebUI (`--bg:#0b0e14;--panel:#11151f;--line:#232a3b;--acc:#5b8cff`).
@@ -66,11 +66,11 @@ POST   /web/api/derp         # apply a full DERP map at runtime {"derpMap": {...
 GET    /web/api/vless/{id}   # VLESS URI for node {id}
 POST   /web/api/vless/{id}   # set node VLESS endpoint settings {address, port, security} — validated against the transport rules (security: none|tls|xtls|reality_xtls, "reality" alias accepted); delegates to `state.SetNodeVLESS` when the runtime per-node override mechanism is available
 GET    /web/api/election     # coordinator election snapshot
-POST   /web/api/election     # set primary node (manual mode)
+POST   /web/api/election     # coordinator election: {"mode": "auto"|"manual"} switches the mode (→ `state.SetElectionMode`), {"node_id": N} sets the fixed primary (→ `state.SetElectionPrimary`); both may be combined; a POST without "mode" only sets/clears the primary (legacy form); switching to auto clears the fixed primary
 GET    /web/api/health       # health + stealth status
 ```
 
-All write endpoints are available under both `/web/api/*` and `/admin/api/*` (alias). They validate JSON and, when the corresponding write method is implemented, delegate to `state.State` (e.g. `CreateUser`, `CreatePreAuthKey`, `SetPolicy`, `DeleteNode`, `SetNodeExpiry`, `RenameNode`, `SetNodeTags`, `SetApprovedRoutes`, `SetDERPMap`, `ExpirePreAuthKey`, `DeletePreAuthKey`, `CreateAPIKey`, `ExpireAPIKey`, `DestroyAPIKey`, and the auth-session verdicts). Otherwise they return stub success for coverage. Holepunching via DERP/STUN is exempt from the VLESS requirement and is only offered when stealth is satisfied.
+All write endpoints are available under both `/web/api/*` and `/admin/api/*` (alias). They validate JSON and, when the corresponding write method is implemented, delegate to `state.State` (e.g. `CreateUser`, `CreatePreAuthKey`, `SetPolicy`, `DeleteNode`, `SetNodeExpiry`, `RenameNode`, `SetNodeTags`, `SetApprovedRoutes`, `SetDERPMap`, `SetElectionMode`, `SetElectionPrimary`, `ExpirePreAuthKey`, `DeletePreAuthKey`, `CreateAPIKey`, `ExpireAPIKey`, `DestroyAPIKey`, and the auth-session verdicts). Otherwise they return stub success for coverage. Holepunching via DERP/STUN is exempt from the VLESS requirement and is only offered when stealth is satisfied.
 
 ## Serving
 

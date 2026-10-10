@@ -286,10 +286,10 @@ func NewState(cfg *types.Config) (*State, error) {
 		db:        db,
 		ipAlloc:   ipAlloc,
 		polMan:    polMan,
-		authCache:  authCache,
-		nodeStore:  nodeStore,
-		pings:      newPingTracker(),
-		election:   NewElectionState(),
+		authCache: authCache,
+		nodeStore: nodeStore,
+		pings:     newPingTracker(),
+		election:  NewElectionState(),
 
 		sshCheckAuth:  make(map[sshCheckPair]time.Time),
 		registerLocks: xsync.NewMap[key.MachinePublic, *sync.Mutex](),
@@ -334,6 +334,12 @@ func (s *State) ElectionSnapshot() map[string]any {
 // SetElectionPrimary sets the elected primary coordinator node ID.
 func (s *State) SetElectionPrimary(nodeID types.NodeID) {
 	s.election.SetPrimary(nodeID)
+}
+
+// SetElectionMode sets the coordinator election mode (auto or
+// manual). Switching to auto clears any fixed primary.
+func (s *State) SetElectionMode(mode ElectionMode) {
+	s.election.SetMode(mode)
 }
 
 // ReloadPolicy reloads the access control policy and triggers auto-approval if changed.

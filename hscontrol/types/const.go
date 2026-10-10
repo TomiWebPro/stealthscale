@@ -13,3 +13,12 @@ const (
 
 	MaxHostnameLength = 255
 )
+
+// ElectionMode describes how the coordinator is elected.
+type ElectionMode string
+
+const (
+	ElectionModeAuto    ElectionMode = "auto"   // any node may become coordinator
+	ElectionModeManual  ElectionMode = "manual" // fixed primary set by the operator
+	ElectionModeUnknown ElectionMode = ""
+)

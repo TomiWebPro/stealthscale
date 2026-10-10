@@ -27,28 +27,31 @@ import (
 type writeMockState struct {
 	mockState
 
-	expirySet   map[types.NodeID]*time.Time
-	renamed     map[types.NodeID]string
-	tagsSet     map[types.NodeID][]string
-	routesSet   map[types.NodeID][]netip.Prefix
-	expiredPAK  []uint64
-	deletedPAK  []uint64
-	apiKeys     []types.APIKey
-	createdKeys uint64
-	expiredAK   []uint64
-	destroyedAK []uint64
-	authCache   map[types.AuthID]*types.AuthRequest
-	derpMaps    []*tailcfg.DERPMap
-	vlessSet    map[types.NodeID]*xray.VLESSConfig
+	expirySet       map[types.NodeID]*time.Time
+	renamed         map[types.NodeID]string
+	tagsSet         map[types.NodeID][]string
+	routesSet       map[types.NodeID][]netip.Prefix
+	expiredPAK      []uint64
+	deletedPAK      []uint64
+	apiKeys         []types.APIKey
+	createdKeys     uint64
+	expiredAK       []uint64
+	destroyedAK     []uint64
+	authCache       map[types.AuthID]*types.AuthRequest
+	derpMaps        []*tailcfg.DERPMap
+	vlessSet        map[types.NodeID]*xray.VLESSConfig
+	electionMode    types.ElectionMode
+	electionPrimary types.NodeID
 }
 
 func newWriteMock() *writeMockState {
 	return &writeMockState{ //nolint:exhaustruct_v5 // test fixture: only fields under test
-		expirySet: map[types.NodeID]*time.Time{},
-		renamed:   map[types.NodeID]string{},
-		tagsSet:   map[types.NodeID][]string{},
-		routesSet: map[types.NodeID][]netip.Prefix{},
-		authCache: map[types.AuthID]*types.AuthRequest{},
+		expirySet:    map[types.NodeID]*time.Time{},
+		renamed:      map[types.NodeID]string{},
+		tagsSet:      map[types.NodeID][]string{},
+		routesSet:    map[types.NodeID][]netip.Prefix{},
+		authCache:    map[types.AuthID]*types.AuthRequest{},
+		electionMode: types.ElectionModeAuto,
 	}
 }
 
@@ -145,6 +148,34 @@ func (m *writeMockState) SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig
 	}
 	m.vlessSet[nodeID] = cfg
 	return nil
+}
+
+func (m *writeMockState) SetElectionMode(mode types.ElectionMode) {
+	m.electionMode = mode
+	// Mirror ElectionState.SetMode: switching to auto
+	// clears any fixed primary.
+	if mode == types.ElectionModeAuto {
+		m.electionPrimary = 0
+	}
+}
+
+func (m *writeMockState) SetElectionPrimary(nodeID types.NodeID) {
+	m.electionPrimary = nodeID
+}
+
+// ElectionSnapshot reports the mock's live election state
+// so tests can read back what the election write endpoints
+// applied (shadows the embedded mockState stub).
+func (m *writeMockState) ElectionSnapshot() map[string]any {
+	primary := ""
+	if m.electionPrimary != 0 {
+		primary = m.electionPrimary.String()
+	}
+	return map[string]any{
+		"mode":         string(m.electionMode),
+		"primary_node": primary,
+		"has_primary":  m.electionPrimary != 0,
+	}
 }
 
 const testAuthID = "hskey-authreq-0123456789abcdef01234567"
@@ -941,6 +972,114 @@ func TestWebUI_VLESSSettings(t *testing.T) {
 	defer srvStub.Close()
 
 	resp = doJSON(t, http.MethodPost, srvStub.URL+"/web/api/vless/1", map[string]any{"address": "10.0.0.1", "port": 10001, "security": "reality_xtls"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var stubOut map[string]any
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&stubOut))
+	resp.Body.Close()
+	assert.Contains(t, stubOut["status"], "stub")
+}
+
+// TestWebUI_ElectionMode pins the election mode switch
+// (goal #4: coordinator election must be configurable
+// from the Web UI). POST /web/api/election validates
+// the "mode" field and delegates to SetElectionMode /
+// SetElectionPrimary — the regression guard for the
+// mode-decoded-then-ignored bug (the handler used to
+// discard the decoded mode and only ever set the
+// primary, so manual mode was unreachable).
+func TestWebUI_ElectionMode(t *testing.T) {
+	cfg := testConfig()
+	st := newWriteMock()
+	h := Handler(cfg, st)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// GET returns the live snapshot: auto mode, no
+	// fixed primary.
+	resp := doJSON(t, http.MethodGet, srv.URL+"/web/api/election", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var snap map[string]any
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&snap))
+	resp.Body.Close()
+	assert.Equal(t, "auto", snap["mode"])
+	assert.Equal(t, false, snap["has_primary"])
+
+	// POST mode + node_id switches to manual and sets
+	// the fixed primary in one step.
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/election", map[string]any{"mode": "manual", "node_id": 42})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var out map[string]any
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	resp.Body.Close()
+	assert.Equal(t, types.ElectionModeManual, st.electionMode)
+	assert.Equal(t, types.NodeID(42), st.electionPrimary)
+	assert.Equal(t, "manual", out["mode"])
+	assert.Equal(t, true, out["has_primary"])
+	assert.Equal(t, "42", out["primary_node"])
+
+	// POST mode only keeps the existing primary.
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/election", map[string]any{"mode": "manual"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+	assert.Equal(t, types.NodeID(42), st.electionPrimary)
+
+	// Switching back to auto clears the fixed primary.
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/election", map[string]any{"mode": "auto"})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	resp.Body.Close()
+	assert.Equal(t, types.ElectionModeAuto, st.electionMode)
+	assert.Equal(t, types.NodeID(0), st.electionPrimary)
+	assert.Equal(t, false, out["has_primary"])
+
+	// Legacy form: node_id without a mode only sets
+	// the primary, the mode is untouched.
+	st.electionMode = types.ElectionModeManual
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/election", map[string]any{"node_id": 7})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+	assert.Equal(t, types.ElectionModeManual, st.electionMode)
+	assert.Equal(t, types.NodeID(7), st.electionPrimary)
+
+	// Empty body keeps the legacy clear-primary
+	// behaviour.
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/election", map[string]any{})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+	assert.Equal(t, types.NodeID(0), st.electionPrimary)
+
+	// Invalid mode -> 400, no state change.
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/election", map[string]any{"mode": "bogus", "node_id": 9})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+	assert.Equal(t, types.ElectionModeManual, st.electionMode)
+	assert.Equal(t, types.NodeID(0), st.electionPrimary)
+
+	// Invalid JSON -> 400.
+	resp = doJSON(t, http.MethodPost, srv.URL+"/web/api/election", map[string]any{"mode": 42})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// Wrong method -> 405.
+	resp = doJSON(t, http.MethodDelete, srv.URL+"/web/api/election", nil)
+	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+	resp.Body.Close()
+
+	// Stub path: a State without the write methods
+	// keeps the stub contract.
+	stStub := &mockState{}
+	hStub := Handler(cfg, stStub)
+	srvStub := httptest.NewServer(hStub)
+	defer srvStub.Close()
+
+	resp = doJSON(t, http.MethodPost, srvStub.URL+"/web/api/election", map[string]any{"mode": "manual", "node_id": 1})
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var stubOut map[string]any

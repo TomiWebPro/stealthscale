@@ -1547,6 +1547,14 @@ func handlePolicyCheck(w http.ResponseWriter, r *http.Request, st State) {
 	writeJSON(w, map[string]any{"status": "ok", "valid": true})
 }
 
+// handleElection serves the coordinator election surface.
+// GET returns the live election snapshot; POST switches the
+// election mode (auto/manual) and/or sets the fixed primary
+// node (goal #4: coordinator election is configurable from
+// the Web UI), delegating to state.State.SetElectionMode and
+// state.State.SetElectionPrimary when the State implements
+// them. An absent mode keeps the legacy behaviour of the
+// endpoint: set (or clear) the primary node only.
 func handleElection(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State) {
 	switch r.Method {
 	case http.MethodGet:
@@ -1567,14 +1575,53 @@ func handleElection(w http.ResponseWriter, r *http.Request, cfg *types.Config, s
 			http.Error(w, "invalid JSON", http.StatusBadRequest)
 			return
 		}
-		// Delegate to state.SetElectionPrimary when available.
-		if ws, ok := any(st).(interface{ SetElectionPrimary(types.NodeID) }); ok {
-			nodeID := types.NodeID(req.Node)
-			ws.SetElectionPrimary(nodeID)
-			writeJSON(w, map[string]any{"status": "primary set", "node_id": nodeID.String()})
-			return
+		// Validate the requested mode against the supported
+		// election modes.
+		var mode types.ElectionMode
+		if req.Mode != "" {
+			switch types.ElectionMode(req.Mode) {
+			case types.ElectionModeAuto, types.ElectionModeManual:
+				mode = types.ElectionMode(req.Mode)
+			default:
+				http.Error(w, fmt.Sprintf("invalid election mode %q: must be %q or %q", req.Mode, types.ElectionModeAuto, types.ElectionModeManual), http.StatusBadRequest)
+				return
+			}
 		}
-		writeJSON(w, map[string]any{"status": "primary set (stub)", "node_id": req.Node})
+		// The fixed primary is applied before the mode switch
+		// so the switch is the final word: switching to auto
+		// clears any fixed primary (ElectionState.SetMode), so
+		// a node_id sent together with mode "auto" would be
+		// immediately cleared.
+		setPrimary := mode != types.ElectionModeAuto &&
+			(req.Node != 0 || mode == types.ElectionModeUnknown)
+		stub := false
+		if setPrimary {
+			if ws, ok := any(st).(interface{ SetElectionPrimary(types.NodeID) }); ok {
+				ws.SetElectionPrimary(types.NodeID(req.Node))
+			} else {
+				stub = true
+			}
+		}
+		if mode != types.ElectionModeUnknown {
+			if ws, ok := any(st).(interface{ SetElectionMode(types.ElectionMode) }); ok {
+				ws.SetElectionMode(mode)
+			} else {
+				stub = true
+			}
+		}
+		status := "election updated"
+		if stub {
+			status = "election updated (stub — wire to state.State.SetElectionMode/SetElectionPrimary)"
+		}
+		out := map[string]any{"status": status}
+		// Report the resulting election state (live read-back
+		// when the state implements the read interface).
+		if snap := st.ElectionSnapshot(); snap != nil {
+			for k, v := range snap {
+				out[k] = v
+			}
+		}
+		writeJSON(w, out)
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

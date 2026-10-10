@@ -238,16 +238,51 @@ async function loadElection() {
     document.getElementById("electionBody").innerHTML = rows
       .map((r) => `<tr><td class="mono">${esc(r[0])}</td><td>${esc(r[1])}</td></tr>`)
       .join("");
-    // Show action button for manual mode
+    // Mode toggle: auto (any node may become coordinator)
+    // or manual (fixed primary). The active mode is
+    // disabled; "Set primary (manual)" only appears once
+    // manual mode is active.
     const actions = document.getElementById("electionActions");
-    if (d.mode === "manual") {
-      actions.innerHTML = `<button onclick="setElectionPrimary()">Set primary (manual)</button>`;
+    const manual = d.mode === "manual";
+    const modeHtml =
+      `<button onclick="setElectionMode('auto')"${manual ? " disabled" : ""}>Auto</button>` +
+      `<button onclick="setElectionMode('manual')"${manual ? "" : " disabled"}>Manual</button>`;
+    if (manual) {
+      actions.innerHTML =
+        modeHtml + `<button onclick="setElectionPrimary()">Set primary (manual)</button>`;
     } else {
-      actions.innerHTML = '<span class="dim">Auto-election is active — no manual control needed.</span>';
+      actions.innerHTML =
+        modeHtml +
+        '<span class="dim">Auto-election is active — any node may become coordinator.</span>';
     }
   } catch (e) {
     document.getElementById("electionBody").innerHTML =
       '<tr><td colspan="2" class="dim">' + esc(e.message) + "</td></tr>";
+  }
+}
+// setElectionMode switches the coordinator election mode.
+// Switching to manual fixes a primary coordinator, so the
+// node ID is asked for in the same step — manual mode
+// never sits without a primary. Switching to auto clears
+// any fixed primary.
+async function setElectionMode(mode) {
+  const body = { mode: mode };
+  if (mode === "manual") {
+    const id = prompt("Enter node ID to set as primary coordinator (e.g. 1):");
+    if (id === null) return;
+    const nodeID = parseInt(id, 10);
+    if (Number.isNaN(nodeID) || nodeID <= 0) {
+      alert("Invalid node ID.");
+      return;
+    }
+    body.node_id = nodeID;
+  }
+  try {
+    await fetchJSONMethod("/election", "POST", body);
+    alert("Election mode set to " + mode + ".");
+    loadElection();
+  } catch (e) {
+    alert(e.message);
   }
 }
 async function setElectionPrimary() {

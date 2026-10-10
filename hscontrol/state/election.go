@@ -6,13 +6,16 @@ import (
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
 )
 
-// ElectionMode describes how coordinator selection works.
-type ElectionMode string
+// ElectionMode describes how coordinator selection works. The
+// canonical definition lives in hscontrol/types so the WebUI
+// write delegation — which must not import this package — can
+// name the type in its type-asserted write interface.
+type ElectionMode = types.ElectionMode
 
 const (
-	ElectionModeAuto    ElectionMode = "auto"     // any node may become coordinator
-	ElectionModeManual  ElectionMode = "manual"   // fixed primary set by operator
-	ElectionModeUnknown ElectionMode = ""
+	ElectionModeAuto    = types.ElectionModeAuto
+	ElectionModeManual  = types.ElectionModeManual
+	ElectionModeUnknown = types.ElectionModeUnknown
 )
 
 // ElectionConfig holds the coordination-election knobs.
@@ -41,11 +44,17 @@ func (e *ElectionState) Mode() ElectionMode {
 }
 
 // SetMode changes the election mode. Returns the previous mode.
+// Switching to auto clears any fixed primary: in auto mode any
+// node may become coordinator, so a stored primary would be
+// stale.
 func (e *ElectionState) SetMode(mode ElectionMode) ElectionMode {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	prev := e.mode
 	e.mode = mode
+	if mode == ElectionModeAuto {
+		e.primary = 0
+	}
 	return prev
 }
 
@@ -72,8 +81,8 @@ func (e *ElectionState) Snapshot() map[string]any {
 		primary = e.primary.String()
 	}
 	return map[string]any{
-		"mode":        string(e.mode),
+		"mode":         string(e.mode),
 		"primary_node": primary,
-		"has_primary": e.primary != 0,
+		"has_primary":  e.primary != 0,
 	}
 }
