@@ -198,6 +198,82 @@ func TestNextDNSCapMapRendering(t *testing.T) {
 			t.Errorf("non-nextdns resolver was rewritten: %q", addr)
 		}
 	})
+
+	t.Run("multiple_caps_pick_sorted_first", func(t *testing.T) {
+		t.Parallel()
+
+		// Go map iteration order is randomised, so a
+		// regression to "literal first matching cap" would
+		// flap the chosen profile between reloads. The pick
+		// must be the sorted-first candidate, every time.
+		capMap := tailcfg.NodeCapMap{
+			"nextdns:zeta":  []tailcfg.RawMessage{},
+			"nextdns:alpha": []tailcfg.RawMessage{},
+		}
+
+		want := "https://dns.nextdns.io/alpha?device_ip=100.64.0.1&device_model=linux&device_name=node1"
+
+		for range 20 {
+			got := generateDNSConfig(
+				mkConfig("https://dns.nextdns.io/global"),
+				mkNode(),
+				capMap,
+			)
+
+			if addr := resolverAddr(t, got); addr != want {
+				t.Fatalf("addr = %q, want %q (sorted-first profile must win deterministically)", addr, want)
+			}
+		}
+	})
+
+	t.Run("malformed_profile_cap_rejected", func(t *testing.T) {
+		t.Parallel()
+
+		// A cap whose profile suffix carries path or query
+		// characters must be rejected, not rewritten into
+		// the resolver URL.
+		capMap := tailcfg.NodeCapMap{
+			"nextdns:../evil?x=1": []tailcfg.RawMessage{},
+		}
+
+		got := generateDNSConfig(
+			mkConfig("https://dns.nextdns.io/global"),
+			mkNode(),
+			capMap,
+		)
+
+		want := "https://dns.nextdns.io/global?device_ip=100.64.0.1&device_model=linux&device_name=node1"
+		if addr := resolverAddr(t, got); addr != want {
+			t.Errorf("addr = %q, want %q (malformed profile must be rejected)", addr, want)
+		}
+	})
+
+	t.Run("typosquatted_doH_host_untouched", func(t *testing.T) {
+		t.Parallel()
+
+		// The NextDNS host check is anchored on the host
+		// segment: a lookalike such as
+		// https://dns.nextdns.io.attacker.example/x is
+		// attacker-controlled, so neither the profile
+		// rewrite nor the device-metadata append (which
+		// would leak device_ip/device_model/device_name)
+		// may touch it.
+		addr := "https://dns.nextdns.io.attacker.example/x"
+
+		capMap := tailcfg.NodeCapMap{
+			"nextdns:honeypot": []tailcfg.RawMessage{},
+		}
+
+		got := generateDNSConfig(
+			mkConfig(addr),
+			mkNode(),
+			capMap,
+		)
+
+		if gotAddr := resolverAddr(t, got); gotAddr != addr {
+			t.Errorf("addr = %q, want %q (lookalike resolver must stay untouched)", gotAddr, addr)
+		}
+	})
 }
 
 // TestBuildFromChangeFiltersPeerPatchesByVisibility proves that incremental
