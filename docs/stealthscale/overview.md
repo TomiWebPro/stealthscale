@@ -192,8 +192,10 @@ done. It reflects the codebase at the time of writing:
   auth approve/reject (SSH-check sessions — registration sessions complete
   via the node's auth URL), policy `PUT` plus `POST /policy/check`
   (validates a draft against live users and nodes), a runtime DERP map
-  apply (`POST /derp`, delegating to `state.SetDERPMap` — the relay setup
-  is configurable without editing `derp.yaml` and restarting), coordinator
+  apply (`POST /derp`, delegating to `state.SetDERPMapRuntime` — the
+  relay setup is configurable without editing `derp.yaml` and
+  restarting; an operator-applied map takes precedence over the
+  config-derived auto-update), coordinator
   election mode switching (`POST /election`, auto/manual plus a fixed
   primary, delegating to `state.SetElectionMode`/`state.SetElectionPrimary`
   — switching to auto clears the fixed primary), and VLESS
@@ -207,11 +209,19 @@ done. It reflects the codebase at the time of writing:
   and sets the fixed primary);
   see the management-parity note in
   [docs/usage/webui.md](../usage/webui.md). Use headscale-ui as the
-  interaction-model reference. Remaining goal-#4 gap: the runtime mechanism
-  behind per-node VLESS endpoint overrides (state store, listener rebind,
-  map distribution) and a DERP-change broadcast hook for connected clients
-  — the surfaces above validate and delegate, and the DERP apply is live
-  via the existing `SetDERPMap` path.
+  interaction-model reference. The DERP apply is live end-to-end: it
+  delegates to `state.SetDERPMapRuntime`, the `state.OnDERPMapChange`
+  listeners (registered by `StealthScale.Serve`, mirrored by
+  `servertest.NewServer`) broadcast the applied map to connected
+  clients immediately, and while an operator-applied map is in effect
+  the config-derived `SetDERPMap` path (startup load and the
+  auto-update ticker) is ignored so the operator's map stands until
+  the process restarts. Remaining goal-#4 gap: the runtime mechanism
+  behind per-node VLESS endpoint overrides (per-node state store,
+  listener rebind) — the `POST /vless/{id}` surface above validates
+  and delegates to `state.SetNodeVLESS` once the mechanism lands
+  (follow-up work item
+  `202610101302-vless-per-node-endpoint-override-mechanism`).
 - **VLESS stealth transport implemented via true Reality.**
   `hscontrol/xray/server.go` uses `github.com/xtls/reality` (`reality.Config`,
   `reality.Server`, `reality.DetectPostHandshakeRecordsLens`) to steal the
