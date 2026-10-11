@@ -86,6 +86,104 @@ func TestValidateAPIKeyNotOk(t *testing.T) {
 	assert.False(t, validWithErr)
 }
 
+// TestAuthenticateAPIKey pins the v2 API's admin-key auth path
+// (hscontrol/api/v2/api.go authMiddleware → State.AuthenticateAPIKey),
+// which had no direct coverage: ValidateAPIKey's expiry boundary is
+// tested above, but AuthenticateAPIKey is the function the v2 API
+// actually calls, and its failure contract differs — it returns the
+// key (with its owning UserID populated, so the request acts as that
+// user) on success, and a distinct ErrAPIKeyExpired on a lapsed key
+// so an operator can tell "the clock passed the key's expiry" from
+// "garbled key". The expiry check runs after format validation, so it
+// must hold for both the hskey-api- and the legacy prefix.secret
+// formats.
+func TestAuthenticateAPIKey(t *testing.T) {
+	t.Run("valid key authenticates and carries owning user", func(t *testing.T) {
+		db, err := newSQLiteTestDB()
+		require.NoError(t, err)
+
+		keyStr, apiKey, err := db.CreateAPIKey(nil)
+		require.NoError(t, err)
+
+		owner := uint(42)
+		err = db.SetAPIKeyUser(apiKey.ID, types.UserID(owner))
+		require.NoError(t, err)
+
+		authed, err := db.AuthenticateAPIKey(keyStr)
+		require.NoError(t, err)
+		require.NotNil(t, authed)
+		assert.Equal(t, apiKey.ID, authed.ID)
+		require.NotNil(t, authed.UserID,
+			"the v2 API acts as the key's owning user, so UserID must be populated")
+		assert.Equal(t, types.UserID(owner), types.UserID(*authed.UserID))
+	})
+
+	t.Run("expired key fails closed with ErrAPIKeyExpired", func(t *testing.T) {
+		db, err := newSQLiteTestDB()
+		require.NoError(t, err)
+
+		expired := time.Now().Add(-time.Hour)
+		keyStr, _, err := db.CreateAPIKey(&expired)
+		require.NoError(t, err)
+
+		authed, err := db.AuthenticateAPIKey(keyStr)
+		assert.Nil(t, authed)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrAPIKeyExpired)
+	})
+
+	t.Run("expired legacy key fails closed with ErrAPIKeyExpired", func(t *testing.T) {
+		db, err := newSQLiteTestDB()
+		require.NoError(t, err)
+
+		legacyPrefix := "abcdefg"
+		legacySecret := strings.Repeat("x", 32)
+		hash, err := bcrypt.GenerateFromPassword([]byte(legacySecret), bcrypt.DefaultCost)
+		require.NoError(t, err)
+
+		expired := time.Now().Add(-time.Hour)
+		err = db.DB.Exec(`
+			INSERT INTO api_keys (prefix, hash, expiration, created_at)
+			VALUES (?, ?, ?, ?)
+		`, legacyPrefix, hash, expired, time.Now()).Error
+		require.NoError(t, err)
+
+		authed, err := db.AuthenticateAPIKey(legacyPrefix + "." + legacySecret)
+		assert.Nil(t, authed)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrAPIKeyExpired)
+	})
+
+	t.Run("wrong secret is a validation error, not an expiry", func(t *testing.T) {
+		db, err := newSQLiteTestDB()
+		require.NoError(t, err)
+
+		keyStr, _, err := db.CreateAPIKey(nil)
+		require.NoError(t, err)
+
+		_, prefixAndSecret, _ := strings.Cut(keyStr, apiKeyPrefix)
+		tampered := apiKeyPrefix + prefixAndSecret[:apiKeyPrefixLength] + "-" +
+			strings.Repeat("x", apiKeyHashLength)
+
+		authed, err := db.AuthenticateAPIKey(tampered)
+		assert.Nil(t, authed)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrAPIKeyExpired)
+	})
+
+	t.Run("empty and unknown keys fail", func(t *testing.T) {
+		db, err := newSQLiteTestDB()
+		require.NoError(t, err)
+
+		unknown := apiKeyPrefix + "ABCDEFGHIJKL-" + strings.Repeat("a", apiKeyHashLength)
+		for _, keyStr := range []string{"", unknown} {
+			authed, err := db.AuthenticateAPIKey(keyStr)
+			assert.Nil(t, authed, "key %q must not authenticate", keyStr)
+			require.Error(t, err, "key %q must error", keyStr)
+		}
+	})
+}
+
 func TestExpireAPIKey(t *testing.T) {
 	db, err := newSQLiteTestDB()
 	require.NoError(t, err)
