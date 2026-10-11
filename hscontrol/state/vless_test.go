@@ -108,3 +108,112 @@ func TestSetNodeVLESSOverrideStore(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "rebind failed")
 }
+
+// TestSetNodeVLESSRollsBackWhenRebindFails pins the
+// atomicity of the override apply: the override is
+// stored before the change listeners fire, so a failed
+// rebind must roll the store back to the previous
+// override and fire the listeners again — the node must
+// never keep an override whose endpoint nothing serves.
+func TestSetNodeVLESSRollsBackWhenRebindFails(t *testing.T) {
+	dbPath := t.TempDir() + "/vless-rollback.db"
+	cfg := persistTestConfig(dbPath)
+
+	s, err := NewState(cfg)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = s.Close() })
+
+	nodeID := types.NodeID(2)
+
+	first := &xray.VLESSConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		ID:       xray.NodeUUID(nodeID, "test-secret"),
+		Network:  "tcp",
+		Address:  "10.0.0.1",
+		Port:     20010,
+		Security: "reality_xtls",
+	}
+	second := &xray.VLESSConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		ID:       xray.NodeUUID(nodeID, "test-secret"),
+		Network:  "tcp",
+		Address:  "10.0.0.2",
+		Port:     20011,
+		Security: "reality_xtls",
+	}
+
+	// The listener records the override the store held
+	// when it fired: the apply, the failed re-apply and
+	// the rollback re-fire.
+	var seenPorts []int
+
+	failNext := false
+
+	s.OnNodeVLESSChange(func(id types.NodeID) error {
+		ov := s.NodeVLESS(id)
+		if ov == nil {
+			seenPorts = append(seenPorts, 0)
+		} else {
+			seenPorts = append(seenPorts, ov.Port)
+		}
+
+		if failNext {
+			failNext = false
+			return errTestRebindFailed
+		}
+
+		return nil
+	})
+
+	require.NoError(t, s.SetNodeVLESS(nodeID, first))
+	require.Equal(t, []int{first.Port}, seenPorts)
+
+	failNext = true
+
+	err = s.SetNodeVLESS(nodeID, second)
+	require.Error(t, err, "a failed rebind must fail the apply")
+	require.ErrorContains(t, err, "rebind failed")
+
+	// The store was rolled back to the previous
+	// override...
+	got := s.NodeVLESS(nodeID)
+	require.NotNil(t, got)
+	assert.Equal(t, first.Port, got.Port)
+	assert.Equal(t, first.Address, got.Address)
+
+	// ...and the listeners fired again with the rolled
+	// back override (apply, failed apply, rollback).
+	require.Equal(t, []int{first.Port, second.Port, first.Port}, seenPorts)
+}
+
+// TestSetNodeVLESSRollsBackToClearWhenRebindFails pins
+// the rollback when no previous override exists: a failed
+// first apply leaves the node on its config-derived
+// endpoint — the store stays empty instead of keeping an
+// override whose rebind failed.
+func TestSetNodeVLESSRollsBackToClearWhenRebindFails(t *testing.T) {
+	dbPath := t.TempDir() + "/vless-rollback-clear.db"
+	cfg := persistTestConfig(dbPath)
+
+	s, err := NewState(cfg)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = s.Close() })
+
+	nodeID := types.NodeID(3)
+
+	s.OnNodeVLESSChange(func(types.NodeID) error {
+		return errTestRebindFailed
+	})
+
+	endpoint := &xray.VLESSConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		ID:       xray.NodeUUID(nodeID, "test-secret"),
+		Network:  "tcp",
+		Address:  "10.0.0.1",
+		Port:     20012,
+		Security: "reality_xtls",
+	}
+
+	err = s.SetNodeVLESS(nodeID, endpoint)
+	require.Error(t, err)
+	assert.Nil(t, s.NodeVLESS(nodeID), "a failed first apply must leave the node on its config-derived endpoint")
+}

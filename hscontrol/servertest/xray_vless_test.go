@@ -420,7 +420,11 @@ func TestVLESSNodeEndpointOverrideRebindsListener(t *testing.T) {
 // presenting the overridden node's UUID to it is refused
 // without the version ack, so a bad override can never
 // make a node's handshake succeed on another node's
-// listener.
+// listener. The failed apply is atomic: the override store
+// is rolled back (the node keeps its config-derived
+// endpoint), the node's own derived listener survives the
+// failed rebind, and the read path reports the derived
+// endpoint again instead of the dead override.
 func TestVLESSNodeOverrideConflictingPortFailsClosed(t *testing.T) {
 	ts := NewServer(t, WithXRay("127.0.0.1", xrayTestPortStart, xrayTestPortEnd))
 
@@ -502,4 +506,126 @@ func TestVLESSNodeOverrideConflictingPortFailsClosed(t *testing.T) {
 
 	_, err = io.ReadFull(conn, ack[:])
 	require.Error(t, err, "the conflicting node must not be acked on another node's listener")
+
+	// The failed apply is atomic: the override was
+	// stored before the rebind was attempted, so the
+	// store must be rolled back — the node keeps its
+	// config-derived endpoint, not the conflicting
+	// one.
+	require.Nil(t, ts.State().NodeVLESS(nodeID), "a failed apply must roll the override store back")
+
+	// The node's own derived listener survived the
+	// failed rebind: it still serves the VLESS
+	// handshake.
+	nodePort := xray.NodePort(nodeID, "", xrayTestPortStart, xrayTestPortEnd)
+	nodeAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(nodePort))
+
+	nodeConn := dialVLESS(t, nodeAddr, nodeID)
+	require.NotNil(t, nodeConn, "the node's derived listener must survive a conflicting override apply")
+
+	// The read path reports the derived endpoint
+	// again, not the dead override.
+	getReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ui.URL+"/web/api/vless/"+nodeID.String(), nil)
+	require.NoError(t, err)
+
+	getResp, err := http.DefaultClient.Do(getReq)
+	require.NoError(t, err)
+
+	defer getResp.Body.Close()
+
+	var got map[string]any
+
+	require.NoError(t, json.NewDecoder(getResp.Body).Decode(&got))
+	assert.InDelta(t, nodePort, got["port"], 0, "the read path must report the derived endpoint after a failed apply")
+	assert.Contains(t, got["uri"], fmt.Sprintf("127.0.0.1:%d", nodePort))
+}
+
+// TestVLESSNodeOverrideSamePortAddressRebind pins the
+// same-port address-only rebind end-to-end: an override
+// that changes only the listen address cannot bind-first
+// while the node's derived listener holds the port, so
+// the rebind tears the derived listener down and retries
+// the bind — the apply succeeds, the node keeps serving
+// on the port (the wildcard listener covers loopback),
+// and in-flight connections keep their deadline.
+func TestVLESSNodeOverrideSamePortAddressRebind(t *testing.T) {
+	ts := NewServer(t, WithXRay("127.0.0.1", xrayTestPortStart, xrayTestPortEnd))
+
+	user := ts.CreateUser(t, "vless-addr-rebind")
+	nv := ts.CreateRegisteredNode(t, user, "vless-addr-rebind-node")
+	nodeID := nv.ID()
+
+	ts.StartXRay(t)
+
+	derivedPort := xray.NodePort(nodeID, "", xrayTestPortStart, xrayTestPortEnd)
+	derivedAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(derivedPort))
+
+	// The node is served on its derived endpoint first;
+	// keep this connection open across the rebind below.
+	inFlight := dialVLESS(t, derivedAddr, nodeID)
+
+	h := webui.Handler(&types.Config{ //nolint:exhaustruct_v5 // test fixture: only the XRay section is under test
+		XRay: types.XRayConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+			Enabled:        true,
+			ListenAddr:     "127.0.0.1",
+			BaseListenPort: xrayTestPortStart,
+			MaxListenPort:  xrayTestPortEnd,
+			Timeout:        30 * time.Second,
+		},
+	}, ts.State())
+
+	ui := httptest.NewServer(h)
+
+	defer ui.Close()
+
+	// The override rebinds to the wildcard address on
+	// the same port: bind-first cannot succeed while
+	// the 127.0.0.1 listener holds the port.
+	body := fmt.Sprintf(`{"address":"0.0.0.0","port":%d,"security":"none"}`, derivedPort)
+
+	applyReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ui.URL+"/web/api/vless/"+nodeID.String(), strings.NewReader(body))
+	require.NoError(t, err)
+
+	applyReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(applyReq)
+	require.NoError(t, err)
+
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode, "a same-port address-only override must apply via the teardown-retry fallback")
+
+	// The override is stored and the read path reports it.
+	require.NotNil(t, ts.State().NodeVLESS(nodeID))
+
+	getReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ui.URL+"/web/api/vless/"+nodeID.String(), nil)
+	require.NoError(t, err)
+
+	getResp, err := http.DefaultClient.Do(getReq)
+	require.NoError(t, err)
+
+	defer getResp.Body.Close()
+
+	var got map[string]any
+
+	require.NoError(t, json.NewDecoder(getResp.Body).Decode(&got))
+	assert.Equal(t, "0.0.0.0", got["address"])
+	assert.InDelta(t, derivedPort, got["port"], 0)
+	assert.Contains(t, got["uri"], fmt.Sprintf("0.0.0.0:%d", derivedPort))
+
+	// The port keeps serving the VLESS handshake: the
+	// wildcard listener covers loopback.
+	rebound := dialVLESS(t, derivedAddr, nodeID)
+	require.NotNil(t, rebound, "the node must keep serving on its port after an address-only rebind")
+
+	// The in-flight connection from before the rebind
+	// keeps its deadline.
+	require.NoError(t, inFlight.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
+
+	_, err = inFlight.Read(make([]byte, 1))
+
+	var netErr net.Error
+
+	require.ErrorAs(t, err, &netErr)
+	assert.True(t, netErr.Timeout(), "in-flight connection must keep its deadline across the address-only rebind")
 }

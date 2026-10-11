@@ -233,7 +233,14 @@ done. It reflects the codebase at the time of writing:
   VLESS listener to the overridden address/port — in-flight
   connections keep their deadline — and the node's effective
   security variant is enforced on the transport, failing closed
-  when the server has no credentials for it. Goal #4 is now
+  when the server has no credentials for it. The apply is
+  atomic: the transport binds the replacement endpoint before
+  tearing the running listener down, and a rebind that cannot
+  bind (e.g. the overridden port is held by another listener)
+  rolls the stored override back and leaves the node serving
+  its previous endpoint — the apply answers 400 with the bind
+  error instead of stranding the node on a dead endpoint.
+  Goal #4 is now
   fully met: every listed aspect is configurable from the
   Web UI.
 - **VLESS stealth transport implemented via true Reality.**

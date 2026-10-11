@@ -25,6 +25,15 @@ var errInvalidNodeID = errors.New("vless override: invalid node id")
 // nil cfg clears the override, returning the node to its
 // config-derived endpoint. Settings follow the transport's
 // own rules (xray.VLESSConfig.Validate).
+//
+// The apply is atomic: the override is stored before the
+// change listeners fire, so when a listener reports the
+// rebind failed, the store is rolled back to the previous
+// override (or its absence) and the listeners fire again —
+// the node keeps serving, and every read path keeps
+// reporting, the endpoint that was live before the apply.
+// The failed rebind's error (joined with any rollback
+// rebind error) is returned to the applier.
 func (s *State) SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig) error {
 	if nodeID == 0 {
 		return errInvalidNodeID
@@ -38,6 +47,13 @@ func (s *State) SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig) error {
 	}
 
 	s.vlessMu.Lock()
+
+	var previous *xray.VLESSConfig
+
+	if old, ok := s.vlessOverrides[nodeID]; ok {
+		prev := *old
+		previous = &prev
+	}
 	if cfg == nil {
 		delete(s.vlessOverrides, nodeID)
 	} else {
@@ -48,6 +64,37 @@ func (s *State) SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig) error {
 	listeners := slices.Clone(s.vlessListeners)
 	s.vlessMu.Unlock()
 
+	errs := fireVLESSChangeListeners(listeners, nodeID)
+	if len(errs) == 0 {
+		return nil
+	}
+
+	// A rebind failed: roll the store back to the previous
+	// override and fire the listeners again. The transport
+	// rebinds back to the endpoint that was live before the
+	// apply; its running listener already serves that
+	// endpoint (a failed rebind leaves it up), so the
+	// re-fire is a no-op there.
+	s.vlessMu.Lock()
+	if previous == nil {
+		delete(s.vlessOverrides, nodeID)
+	} else {
+		stored := *previous
+		s.vlessOverrides[nodeID] = &stored
+	}
+
+	listeners = slices.Clone(s.vlessListeners)
+	s.vlessMu.Unlock()
+
+	rollbackErrs := fireVLESSChangeListeners(listeners, nodeID)
+
+	return errors.Join(append(errs, rollbackErrs...)...)
+}
+
+// fireVLESSChangeListeners runs the registered per-node
+// VLESS change listeners for the node and collects their
+// errors.
+func fireVLESSChangeListeners(listeners []func(types.NodeID) error, nodeID types.NodeID) []error {
 	var errs []error
 
 	for _, fn := range listeners {
@@ -57,7 +104,7 @@ func (s *State) SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig) error {
 		}
 	}
 
-	return errors.Join(errs...)
+	return errs
 }
 
 // NodeVLESS returns the operator-applied VLESS endpoint

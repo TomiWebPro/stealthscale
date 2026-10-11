@@ -19,6 +19,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -867,4 +868,139 @@ func TestEnsureNodeListenerRebindsToDerivedOnOverrideClear(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Same(t, reb, server.listeners[nodeID], "an unchanged derived endpoint must not rebind")
+}
+
+// TestEnsureNodeListenerFailedRebindKeepsPreviousListener pins
+// the rebind failure mode: a rebind whose replacement endpoint
+// cannot be bound (its port is held by another process) must
+// leave the node's previous listener running — the rebind binds
+// the replacement before tearing the running listener down — and
+// return the error to the applier, so a failed override apply
+// never strands the node without a listener while the stored
+// override advertises the dead endpoint.
+func TestEnsureNodeListenerFailedRebindKeepsPreviousListener(t *testing.T) {
+	cfg := testXRayConfig()
+	server, err := NewServer(&cfg, func(conn net.Conn) {})
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	defer func() { _ = server.Shutdown(context.Background()) }()
+
+	nodeID := types.NodeID(1006)
+
+	derived, err := server.EnsureNodeListener(ctx, nodeID, nil)
+	require.NoError(t, err)
+
+	first := server.listeners[nodeID]
+	require.NotNil(t, first)
+
+	// Hold an ephemeral port so the rebind target is occupied.
+	blocker, err := listenerConfig.Listen(ctx, "tcp", net.JoinHostPort(cfg.ListenAddr, "0"))
+	require.NoError(t, err)
+
+	defer blocker.Close()
+
+	blockerAddr, ok := blocker.Addr().(*net.TCPAddr)
+	require.True(t, ok, "the blocker listener must have a TCP address")
+
+	blockerPort := blockerAddr.Port
+
+	// Rebind onto the held port: the apply fails...
+	override := &VLESSConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		ID:       NodeUUID(nodeID, ""),
+		Network:  "tcp",
+		Address:  cfg.ListenAddr,
+		Port:     blockerPort,
+		Security: "none",
+	}
+
+	_, err = server.EnsureNodeListener(ctx, nodeID, override)
+	require.Error(t, err, "a rebind onto a held port must fail")
+	require.ErrorContains(t, err, "listening for node")
+	require.ErrorContains(t, err, strconv.Itoa(blockerPort))
+
+	// ...and the previous listener is still the one
+	// serving: the node is not left without a listener.
+	assert.Same(t, first, server.listeners[nodeID], "a failed rebind must leave the previous listener running")
+
+	conn, err := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", cfg.ListenAddr, derived.Port)) //nolint:exhaustruct_v5 // test fixture: only the timeout is under test
+	require.NoError(t, err)
+
+	defer conn.Close()
+
+	_, err = conn.Write(vlessHeader(t, nodeID))
+	require.NoError(t, err)
+
+	var ack [1]byte
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, err = io.ReadFull(conn, ack[:])
+	require.NoError(t, err, "the previous listener must keep serving after a failed rebind")
+	assert.Equal(t, uint8(vlessVersion), ack[0])
+}
+
+// TestEnsureNodeListenerSamePortAddressRebind pins the
+// same-port rebind fallback: an override that changes only the
+// listen address (same port) cannot bind-first while the running
+// listener holds the port, so the rebind tears the old listener
+// down and retries the bind — the apply succeeds and the node
+// keeps serving on the port (the wildcard listener covers
+// loopback).
+func TestEnsureNodeListenerSamePortAddressRebind(t *testing.T) {
+	cfg := testXRayConfig()
+	server, err := NewServer(&cfg, func(conn net.Conn) {})
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	defer func() { _ = server.Shutdown(context.Background()) }()
+
+	nodeID := types.NodeID(1007)
+
+	derived, err := server.EnsureNodeListener(ctx, nodeID, nil)
+	require.NoError(t, err)
+
+	first := server.listeners[nodeID]
+	require.NotNil(t, first)
+
+	// The override moves the listener to the wildcard
+	// address on the same port: bind-first cannot succeed
+	// while the 127.0.0.1 listener holds the port.
+	override := &VLESSConfig{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+		ID:       NodeUUID(nodeID, ""),
+		Network:  "tcp",
+		Address:  "0.0.0.0",
+		Port:     derived.Port,
+		Security: "none",
+	}
+
+	reb, err := server.EnsureNodeListener(ctx, nodeID, override)
+	require.NoError(t, err, "a same-port address-only rebind must succeed via the teardown-retry fallback")
+	assert.Equal(t, derived.Port, reb.Port)
+
+	// The listener was rebound to the wildcard address...
+	rebNL := server.listeners[nodeID]
+	require.NotNil(t, rebNL)
+	assert.NotSame(t, first, rebNL, "an address-only rebind must rebind the listener")
+	assert.Equal(t, "0.0.0.0", rebNL.addr)
+
+	// ...and the port keeps serving the VLESS handshake
+	// (the wildcard listener covers loopback).
+	conn, err := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", cfg.ListenAddr, derived.Port)) //nolint:exhaustruct_v5 // test fixture: only the timeout is under test
+	require.NoError(t, err)
+
+	defer conn.Close()
+
+	_, err = conn.Write(vlessHeader(t, nodeID))
+	require.NoError(t, err)
+
+	var ack [1]byte
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	_, err = io.ReadFull(conn, ack[:])
+	require.NoError(t, err, "the rebound listener must serve the VLESS handshake")
+	assert.Equal(t, uint8(vlessVersion), ack[0])
 }

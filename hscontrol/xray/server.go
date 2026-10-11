@@ -13,9 +13,11 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +41,10 @@ var (
 		Name:      "reality_handshake_failure_total",
 		Help:      "total count of failed Reality handshakes",
 	}, []string{"dest", "sni", "reason"})
+
+	// listenerConfig binds every per-node VLESS
+	// listener (net.Listen cannot carry a context).
+	listenerConfig net.ListenConfig
 )
 
 // bufferedConn is a net.Conn whose reads go through a bufio.Reader, so
@@ -372,6 +378,15 @@ func (s *Server) NodeConfig(nodeID types.NodeID) *VLESSConfig {
 // the old listener stops new accepts only — in-flight connections
 // are served by their own handleConn goroutines and keep their
 // deadline.
+//
+// The rebind is atomic: the replacement endpoint is bound before
+// the running listener is torn down. A rebind that cannot bind —
+// the replacement port is held by another listener, or the
+// replacement cannot bind even after the running listener is
+// cleared for a same-port address or security-variant change —
+// leaves the node's previous listener running and returns the
+// error, so a failed apply never leaves the node without a
+// listener.
 func (s *Server) EnsureNodeListener(ctx context.Context, nodeID types.NodeID, override *VLESSConfig) (*VLESSConfig, error) {
 	config := s.NodeConfig(nodeID)
 	if override != nil {
@@ -406,27 +421,79 @@ func (s *Server) EnsureNodeListener(ctx context.Context, nodeID types.NodeID, ov
 		if nl.addr == config.Address && nl.port == config.Port && nl.security == sec {
 			return config, nil
 		}
-		// Effective endpoint changed: rebind. The old listener's
-		// accept loop exits on its own (cancel + close); established
-		// connections are left untouched.
+
+		// Effective endpoint changed: bind the replacement
+		// first and only tear the running listener down once
+		// the replacement is listening, so a failed rebind
+		// leaves the node serving its previous endpoint
+		// instead of nothing. The old listener's accept
+		// loop exits on its own (cancel + close);
+		// established connections are left untouched.
+		ln, err := listenerConfig.Listen(ctx, "tcp", net.JoinHostPort(config.Address, strconv.Itoa(config.Port)))
+		if err == nil {
+			s.swapNodeListener(ctx, nl, ln, nodeID, config.Address, config.Port, sec)
+
+			return config, nil
+		}
+
+		if nl.port != config.Port {
+			// The replacement port is held by another
+			// listener: the previous one stays up and the
+			// caller is told the rebind failed.
+			return nil, fmt.Errorf("listening for node %d on port %d: %w", nodeID, config.Port, err)
+		}
+
+		// Same port, different address or security
+		// variant: bind-first cannot succeed while the
+		// running listener holds the port. Tear it down
+		// and retry the bind; if that fails too, roll
+		// back by rebinding the original endpoint so the
+		// node never ends up without a listener.
+		origAddr, origPort, origSecurity := nl.addr, nl.port, nl.security
 		nl.cancel()
 		_ = nl.ln.Close()
 
 		delete(s.listeners, nodeID)
+
+		ln, err = listenerConfig.Listen(ctx, "tcp", net.JoinHostPort(config.Address, strconv.Itoa(config.Port)))
+		if err == nil {
+			s.registerNodeListener(ctx, nodeID, config.Address, config.Port, sec, ln)
+
+			return config, nil
+		}
+
+		rebindErr := fmt.Errorf("listening for node %d on port %d: %w", nodeID, config.Port, err)
+
+		origLn, origErr := listenerConfig.Listen(ctx, "tcp", net.JoinHostPort(origAddr, strconv.Itoa(origPort)))
+		if origErr != nil {
+			return nil, errors.Join(rebindErr, fmt.Errorf("rolling back node %d to %s:%d: %w", nodeID, origAddr, origPort, origErr))
+		}
+
+		s.registerNodeListener(ctx, nodeID, origAddr, origPort, origSecurity, origLn)
+
+		return nil, rebindErr
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	ln, err := net.Listen("tcp", net.JoinHostPort(config.Address, fmt.Sprintf("%d", config.Port)))
+	ln, err := listenerConfig.Listen(ctx, "tcp", net.JoinHostPort(config.Address, strconv.Itoa(config.Port)))
 	if err != nil {
-		cancel()
 		return nil, fmt.Errorf("listening for node %d on port %d: %w", nodeID, config.Port, err)
 	}
 
+	s.registerNodeListener(ctx, nodeID, config.Address, config.Port, sec, ln)
+
+	return config, nil
+}
+
+// registerNodeListener stores a freshly bound listener for
+// the node and starts its accept loop. Callers hold s.mu.
+func (s *Server) registerNodeListener(ctx context.Context, nodeID types.NodeID, addr string, port int, security string, ln net.Listener) {
+	ctx, cancel := context.WithCancel(ctx)
+
 	nl := &nodeListener{
 		nodeID:   nodeID,
-		addr:     config.Address,
-		port:     config.Port,
-		security: sec,
+		addr:     addr,
+		port:     port,
+		security: security,
 		ln:       ln,
 		cancel:   cancel,
 		done:     make(chan struct{}),
@@ -434,8 +501,22 @@ func (s *Server) EnsureNodeListener(ctx context.Context, nodeID types.NodeID, ov
 	s.listeners[nodeID] = nl
 
 	go s.acceptLoop(ctx, nl)
+}
 
-	return config, nil
+// swapNodeListener replaces the node's running listener
+// with an already-bound replacement: the old listener's
+// accept loop exits (cancel + close; established
+// connections keep their deadline) and the replacement
+// takes over the map entry. Callers hold s.mu and must
+// have bound ln first, so the swap cannot leave the node
+// without a listener.
+func (s *Server) swapNodeListener(ctx context.Context, old *nodeListener, ln net.Listener, nodeID types.NodeID, addr string, port int, security string) {
+	old.cancel()
+	_ = old.ln.Close()
+
+	delete(s.listeners, nodeID)
+
+	s.registerNodeListener(ctx, nodeID, addr, port, security, ln)
 }
 
 // Shutdown closes all per-node listeners and waits for the accept loops to
