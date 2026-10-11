@@ -111,7 +111,7 @@ The URI is produced by the server:
 ```shell
 stscale nodes vless <node-id>
 # vless://9f4d4f6c-...@10.0.0.5:10042?security=reality_xtls&fp=chrome&type=tcp&flow=xtls-rprx-vision&dest=www.cloudflare.com%3A443&pbk=<pubkey-hex>&sid=<shortId-hex>&spx=%2F
-# for reality_xtls: dest (decoy), pbk (Reality public key hex), sid (shortId hex), spx (SpiderX), fp (uTLS fingerprint: chrome/firefox/safari/ios/randomized → hscontrol/xray/client.go:247)
+# for reality_xtls: dest (decoy), pbk (Reality public key hex), sid (shortId hex), spx (SpiderX), fp (uTLS fingerprint: chrome/firefox/safari/ios/randomized → hscontrol/xray/client.go:205)
 # for none/tls/xtls: vless://<uuid>@<addr>:<port>?security=<mode>
 ```
 

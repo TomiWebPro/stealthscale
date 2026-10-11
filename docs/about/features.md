@@ -4,7 +4,7 @@ StealthScale keeps the full Headscale control-plane feature set while replacing 
 
 ## Stealth transport (StealthScale-only)
 
-- [x] **VLESS + Reality (xtls/reality) + uTLS** — per-node deterministic UUID/port listeners, decoy dest `www.cloudflare.com:443` (dual decoy `www.microsoft.com:443`), ClientHello shaped as `chrome`/`firefox`/`safari`/`ios`/`randomized` (`hscontrol/xray/client.go:247`). See [XRay/VLESS reference](../ref/xray-vless.md) and [Threat model](../ref/threat-model.md).
+- [x] **VLESS + Reality (xtls/reality) + uTLS** — per-node deterministic UUID/port listeners, decoy dest `www.cloudflare.com:443` (dual decoy `www.microsoft.com:443`), ClientHello shaped as `chrome`/`firefox`/`safari`/`ios`/`randomized` (`hscontrol/xray/client.go:205`). See [XRay/VLESS reference](../ref/xray-vless.md) and [Threat model](../ref/threat-model.md).
 - [x] **Unified binary** — single `stscale` binary: `stscale serve` (coordinator) and `stscale up --coordinator --vless-uri` (node, `hscontrol/xray/client.go` `DialVLESS` + `RealityUClient`). No separate headscale server or patched `tailscaled` required, but patched client reference exists (`client/patch/direct.go.diff`). See [StealthScale clients](../stealthscale/clients.md).
 - [x] **Stealth-gated DERP (fail-closed)** — `hscontrol/stealth/stealth.go` `Checker.IsSatisfied()` + `FilterDERPMap()`; when Reality not satisfied DERP map is empty, no relay leak. See [XRay/VLESS reference](../ref/xray-vless.md).
 - [x] **Deterministic per-node endpoints** — `UUIDv5(HMAC(secret,"uuid-namespace")[:16], "node:<id>")` and `HMAC(secret,"node-port:<id>")` mapped into `[xray.listen_port, xray.max_listen_port]` (`hscontrol/xray/vless.go:152`). Static `vless://` URI with `pbk`/`sid`/`dest`/`spx`/`fp`.

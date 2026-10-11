@@ -31,7 +31,9 @@ key) before joining.
 **There is no separate client.** `stscale` is the single unified binary:
 `stscale serve` (coordinator) and `stscale up` (node) are the same binary.
 `stscale up` does `DialVLESS` + `RealityUClient` + `controlbase.Client` over
-VLESS `cmd/stealthscale/cli/up.go:61`. It is built for `linux/amd64 + linux_arm_6/arm_7 + freebsd_arm64 (11 targets)`,
+VLESS: `xray.DialVLESS` at `cmd/stealthscale/cli/up.go:185` (which runs
+`RealityUClient` internally, `hscontrol/xray/client.go:164`), then
+`controlbase.Client` at `up.go:228`. It is built for `linux/amd64 + linux_arm_6/arm_7 + freebsd_arm64 (11 targets)`,
 `linux/arm64`, `linux/arm`, `darwin/amd64`, `darwin/arm64`, `freebsd/amd64`,
 `windows/amd64`, `windows/arm64` via `.goreleaser.yml:29` (`binary: stscale`,
 `CGO_ENABLED=0`, `goreleaser build --snapshot`).

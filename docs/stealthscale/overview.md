@@ -63,7 +63,7 @@ like ordinary TLS to a network observer:
 - **Reality (xtls/reality, MPL-2.0)** — the server steals the live TLS handshake
   of the decoy dest (default `www.cloudflare.com:443`, with
   `www.microsoft.com:443` as second decoy) via `github.com/xtls/reality`
-  (`hscontrol/xray/server.go:159` `buildRealityConfig` + `reality.Server`).
+  (`hscontrol/xray/server.go:165` `buildRealityConfig` + `reality.Server`).
   The client validates the server via its Reality public key
   (`hscontrol/xray/reality_client.go:79` `VerifyPeerCertificate`), not the
   certificate. The dest's 2044-byte EncryptedExtensions (Cloudflare) vs 32 for a
@@ -158,7 +158,7 @@ StealthScale's default transport is **VLESS + Reality (xtls/reality) + uTLS**
 (`xray.security: reality_xtls`). The server steals the live TLS handshake of
 the decoy dest (default `www.cloudflare.com:443`, dual decoys
 `www.cloudflare.com`/`www.microsoft.com` + bare domains) via
-`github.com/xtls/reality` (`hscontrol/xray/server.go:159`) and `utls` shapes
+`github.com/xtls/reality` (`hscontrol/xray/server.go:165`) and `utls` shapes
 the ClientHello to mimic Chrome/Firefox. The client validates the server via
 its Reality public key (`hscontrol/xray/reality_client.go:79`) and SessionId
 AEAD, not the certificate. `xray.reality.dest`, `server_names`, `short_ids`,

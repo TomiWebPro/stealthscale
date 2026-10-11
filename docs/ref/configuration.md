@@ -53,7 +53,7 @@ xray:
   cert_file: ""  # only for tls/xtls
   key_file: ""
   timeout: 30s
-  utls_fingerprint: chrome  # chrome, firefox, safari, randomized, ios → hscontrol/xray/client.go:247
+  utls_fingerprint: chrome  # chrome, firefox, safari, randomized, ios → hscontrol/xray/client.go:205
   secret: ""  # HMAC key for NodeUUID/Port + Reality keypair; auto to .xray_secret for sqlite, MUST set for postgres
   reality:
     dest: "www.cloudflare.com:443"  # decoy; www.microsoft.com works but 8273-byte cert > 8192 pre-read limit

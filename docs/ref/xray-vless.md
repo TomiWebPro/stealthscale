@@ -45,8 +45,8 @@ Alternatives: `security: none` (plain VLESS), `tls` (requires `cert_file`/`key_f
 
 - **VLESS**: lightweight proxying, looks like TLS.
 - **Reality (xtls/reality)**: the server replays the dest site's real TLS handshake (cert, EncryptedExtensions) so the endpoint is indistinguishable from the decoy (e.g. `www.cloudflare.com`). Uses `github.com/xtls/reality` (MPL-2.0). The 2044-byte EncryptedExtensions of Cloudflare vs 32 for a local self-signed dest hits the `>512` branch in `reality/tls.go:341` — handled.
-- **uTLS**: ClientHello fingerprint mimics Chrome/Firefox (`chrome`, `firefox`, `safari`, `randomized`, `ios` via `hscontrol/xray/client.go:212` `fpToClientHelloID`), defeating active probing.
-- **Reality public-key validation**: the client proves knowledge of the server's X25519 public key via the SessionId AEAD trick (see `hscontrol/xray/reality_client.go:66` `VerifyPeerCertificate`); the server's temporary ed25519 cert signature is `HMAC-SHA512(pub, authKey)`.
+- **uTLS**: ClientHello fingerprint mimics Chrome/Firefox (`chrome`, `firefox`, `safari`, `randomized`, `ios` via `hscontrol/xray/client.go:205` `fpToClientHelloID`), defeating active probing.
+- **Reality public-key validation**: the client proves knowledge of the server's X25519 public key via the SessionId AEAD trick (see `hscontrol/xray/reality_client.go:79` `VerifyPeerCertificate`); the server's temporary ed25519 cert signature is `HMAC-SHA512(pub, authKey)`.
 
 Together, node traffic is not fingerprintable as Tailscale and not distinguishable from a browser visiting the decoy.
 
@@ -75,7 +75,7 @@ vless://a1b2c3d4-...@192.0.2.1:10042?security=reality_xtls&fp=chrome&type=tcp&fl
 ```
 
 - `security=reality_xtls` selects true Reality (steals `www.cloudflare.com:443` by default; `dest` carries the decoy).
-- `fp=chrome` is `utls_fingerprint` (`chrome`, `firefox`, `safari`, `ios`, `randomized` → `hscontrol/xray/client.go:247` `fpToClientHelloID`).
+- `fp=chrome` is `utls_fingerprint` (`chrome`, `firefox`, `safari`, `ios`, `randomized` → `hscontrol/xray/client.go:205` `fpToClientHelloID`).
 - `pbk` is the Reality public key (hex, 32 bytes, from `xray.reality.public_key` derived via `InitIdentity`), `sid` the shortId, `dest` the decoy, `spx` the SpiderX path.
 - `type=tcp&flow=xtls-rprx-vision` for URI compatibility.
 
