@@ -15,6 +15,20 @@ import (
 // per-node VLESS endpoint override write path.
 var errInvalidNodeID = errors.New("vless override: invalid node id")
 
+// vlessAppliedState tracks, per node, the last
+// successfully applied VLESS endpoint override and the
+// sequence number of that apply. Applies to the same
+// node may interleave (two API applies within the
+// listener-firing window), so a failed apply rolls the
+// store back to this state — never to the store's
+// current entry, which may be a concurrent apply's
+// not-yet-committed override whose own rebind has not
+// settled yet.
+type vlessAppliedState struct {
+	last    *xray.VLESSConfig
+	lastSeq uint64
+}
+
 // SetNodeVLESS stores an operator-applied per-node VLESS
 // endpoint override (Web UI runtime apply, goal #4). The
 // override is consulted by the VLESS read paths and enforced
@@ -28,12 +42,17 @@ var errInvalidNodeID = errors.New("vless override: invalid node id")
 //
 // The apply is atomic: the override is stored before the
 // change listeners fire, so when a listener reports the
-// rebind failed, the store is rolled back to the previous
-// override (or its absence) and the listeners fire again —
-// the node keeps serving, and every read path keeps
-// reporting, the endpoint that was live before the apply.
-// The failed rebind's error (joined with any rollback
-// rebind error) is returned to the applier.
+// rebind failed, the store is rolled back to the last
+// successfully applied override (or its absence) and the
+// listeners fire again — the node keeps serving, and every
+// read path keeps reporting, the endpoint that was live
+// before the apply. Applies to the same node may interleave:
+// the rollback target is the per-node last-successful-apply
+// state, not the store's current entry, so a failed apply
+// neither resurrects a concurrent apply's failed override
+// nor clobbers a concurrent apply that succeeded. The failed
+// rebind's error (joined with any rollback rebind error) is
+// returned to the applier.
 func (s *State) SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig) error {
 	if nodeID == 0 {
 		return errInvalidNodeID
@@ -48,17 +67,26 @@ func (s *State) SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig) error {
 
 	s.vlessMu.Lock()
 
-	var previous *xray.VLESSConfig
-
-	if old, ok := s.vlessOverrides[nodeID]; ok {
-		prev := *old
-		previous = &prev
+	applied := s.vlessApplied[nodeID]
+	if applied == nil {
+		applied = &vlessAppliedState{} //nolint:exhaustruct_v5 // zero value: no successful apply yet
+		s.vlessApplied[nodeID] = applied
 	}
+
+	// Sequence the apply so its commit or rollback can tell
+	// whether a concurrent apply succeeded after this one
+	// stored its override.
+	seq := s.vlessSeq
+	s.vlessSeq++
+
+	var entry *xray.VLESSConfig
+
 	if cfg == nil {
 		delete(s.vlessOverrides, nodeID)
 	} else {
 		stored := *cfg
-		s.vlessOverrides[nodeID] = &stored
+		entry = &stored
+		s.vlessOverrides[nodeID] = entry
 	}
 
 	listeners := slices.Clone(s.vlessListeners)
@@ -66,21 +94,31 @@ func (s *State) SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig) error {
 
 	errs := fireVLESSChangeListeners(listeners, nodeID)
 	if len(errs) == 0 {
-		return nil
+		return s.commitVLESSApply(nodeID, applied, entry, seq)
 	}
 
-	// A rebind failed: roll the store back to the previous
-	// override and fire the listeners again. The transport
-	// rebinds back to the endpoint that was live before the
-	// apply; its running listener already serves that
-	// endpoint (a failed rebind leaves it up), so the
-	// re-fire is a no-op there.
+	// A rebind failed: roll the store back to the last
+	// successfully applied override and fire the listeners
+	// again. The transport rebinds back to the endpoint that
+	// was live before the apply; its running listener already
+	// serves that endpoint (a failed rebind leaves it up), so
+	// the re-fire is a no-op there.
 	s.vlessMu.Lock()
-	if previous == nil {
-		delete(s.vlessOverrides, nodeID)
+
+	if applied.lastSeq > seq {
+		// A concurrent apply succeeded after this apply stored
+		// its override: that apply owns the node's state now,
+		// and restoring this apply's previous state would
+		// clobber it.
+		s.vlessMu.Unlock()
+
+		return errors.Join(errs...)
+	}
+
+	if applied.last != nil {
+		s.vlessOverrides[nodeID] = applied.last
 	} else {
-		stored := *previous
-		s.vlessOverrides[nodeID] = &stored
+		delete(s.vlessOverrides, nodeID)
 	}
 
 	listeners = slices.Clone(s.vlessListeners)
@@ -89,6 +127,62 @@ func (s *State) SetNodeVLESS(nodeID types.NodeID, cfg *xray.VLESSConfig) error {
 	rollbackErrs := fireVLESSChangeListeners(listeners, nodeID)
 
 	return errors.Join(append(errs, rollbackErrs...)...)
+}
+
+// commitVLESSApply records a successful apply: the stored
+// override becomes the node's committed live state and the
+// per-node last-successful-apply state advances to it.
+// When a concurrent apply superseded the entry while the
+// listeners fired, the entry is re-stored and the listeners
+// re-fired so the read paths and the transport agree with
+// this apply's success — the superseding apply cannot have
+// succeeded already (that would have advanced lastSeq past
+// this apply's sequence and been skipped instead). The
+// re-fire's errors (if any) are returned to the applier:
+// the apply itself succeeded, but the transport failed to
+// rebind to it.
+func (s *State) commitVLESSApply(
+	nodeID types.NodeID,
+	applied *vlessAppliedState,
+	entry *xray.VLESSConfig,
+	seq uint64,
+) error {
+	s.vlessMu.Lock()
+
+	if applied.lastSeq > seq {
+		// A concurrent apply succeeded after this apply stored
+		// its override: that apply owns the node's state now.
+		s.vlessMu.Unlock()
+
+		return nil
+	}
+
+	var listeners []func(types.NodeID) error
+
+	if entry != nil {
+		if cur, ok := s.vlessOverrides[nodeID]; !ok || cur != entry {
+			// Superseded while in flight: re-store the entry so
+			// the read paths agree with the successful apply.
+			s.vlessOverrides[nodeID] = entry
+			listeners = slices.Clone(s.vlessListeners)
+		}
+	} else if _, ok := s.vlessOverrides[nodeID]; ok {
+		// A successful clear superseded while in flight:
+		// re-apply it so the read paths agree.
+		delete(s.vlessOverrides, nodeID)
+		listeners = slices.Clone(s.vlessListeners)
+	}
+
+	applied.last = entry
+	applied.lastSeq = seq
+
+	s.vlessMu.Unlock()
+
+	if listeners == nil {
+		return nil
+	}
+
+	return errors.Join(fireVLESSChangeListeners(listeners, nodeID)...)
 }
 
 // fireVLESSChangeListeners runs the registered per-node

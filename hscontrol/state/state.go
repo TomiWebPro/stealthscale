@@ -167,12 +167,26 @@ type State struct {
 	// dependents (the mapper batcher) learn of the change.
 	derpMapListeners []func()
 
-	// vlessMu guards vlessOverrides and vlessListeners.
+	// vlessMu guards vlessOverrides, vlessApplied,
+	// vlessListeners and vlessSeq.
 	vlessMu sync.Mutex
 	// vlessOverrides holds operator-applied per-node VLESS
 	// endpoint settings (Web UI runtime apply); a node absent
-	// from the map uses its config-derived endpoint.
+	// from the map uses its config-derived endpoint. The
+	// current entry may belong to an apply still in flight —
+	// vlessApplied tracks the last successful one.
 	vlessOverrides map[types.NodeID]*xray.VLESSConfig
+	// vlessApplied tracks, per node, the last successfully
+	// applied VLESS override and its apply sequence: a failed
+	// apply rolls the store back to it (never to the current
+	// entry, which may be a concurrent in-flight apply's
+	// override), and it decides whether a late-completing
+	// apply still owns the node's state.
+	vlessApplied map[types.NodeID]*vlessAppliedState
+	// vlessSeq sequences VLESS override applies so a commit or
+	// rollback can tell whether a concurrent apply succeeded
+	// after it stored its override.
+	vlessSeq uint64
 	// vlessListeners run after every per-node VLESS override
 	// store or clear so the transport rebinds the node's
 	// VLESS listener.
@@ -319,6 +333,7 @@ func NewState(cfg *types.Config) (*State, error) {
 		election:  NewElectionState(),
 
 		vlessOverrides: make(map[types.NodeID]*xray.VLESSConfig),
+		vlessApplied:   make(map[types.NodeID]*vlessAppliedState),
 
 		sshCheckAuth:  make(map[sshCheckPair]time.Time),
 		registerLocks: xsync.NewMap[key.MachinePublic, *sync.Mutex](),
