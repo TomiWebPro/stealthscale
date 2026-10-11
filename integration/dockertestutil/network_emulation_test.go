@@ -239,12 +239,28 @@ func TestBuildNetemFilter(t *testing.T) {
 			want:  "corrupt 0.10%",
 		},
 		{
+			// The kernel rejects "netem reorder" without a base
+			// delay, so reorder-only conditions synthesize a
+			// minimal default delay.
+			name:  "reordering only",
+			conds: NetworkConditions{ReorderPct: 12.5}, //nolint:exhaustruct_v5 // test fixture: only field under test
+			want:  "delay 1ms reorder 12.50%",
+		},
+		{
 			name: "combined latency + loss",
 			conds: NetworkConditions{
 				Latency: 300 * time.Millisecond,
 				DropPct: 20,
 			},
 			want: "delay 300ms 75ms drop 20.00%",
+		},
+		{
+			name: "combined latency + reorder",
+			conds: NetworkConditions{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+				Latency:    100 * time.Millisecond,
+				ReorderPct: 7.25,
+			},
+			want: "delay 100ms 25ms reorder 7.25%",
 		},
 		{
 			name: "all primitives",
@@ -254,8 +270,9 @@ func TestBuildNetemFilter(t *testing.T) {
 				DropPct:      5.5,
 				DuplicatePct: 2.0,
 				CorrPct:      0.25,
+				ReorderPct:   1.5,
 			},
-			want: "delay 150ms 30ms drop 5.50% duplicate 2.00% corrupt 0.25%",
+			want: "delay 150ms 30ms drop 5.50% duplicate 2.00% corrupt 0.25% reorder 1.50%",
 		},
 	}
 

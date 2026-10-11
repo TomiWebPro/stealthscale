@@ -19,6 +19,7 @@ const (
 	TC_Loss               // packet loss
 	TC_Duplication        // duplicate packets
 	TC_Corruption         // bit corruption
+	TC_Reordering         // out-of-order delivery
 )
 
 func (t TCType) String() string {
@@ -31,10 +32,19 @@ func (t TCType) String() string {
 		return "duplication"
 	case TC_Corruption:
 		return "corruption"
+	case TC_Reordering:
+		return "reordering"
 	default:
 		return "unknown"
 	}
 }
+
+// defaultReorderDelay is the minimal base delay synthesized when
+// ReorderPct is set without Latency: the kernel rejects
+// "netem reorder" without a delay ("reordering not possible
+// without specifying some delay"), so a reorder-only condition
+// falls back to this — mirroring the Jitter default.
+const defaultReorderDelay = time.Millisecond
 
 // NetworkConditions carries the full set of degraded-network parameters to
 // apply to containers via [NetworkEmulation]. Zero values mean "unspecified"
@@ -45,11 +55,17 @@ type NetworkConditions struct {
 	DropPct      float64       // percentage of packets to drop (0–100)
 	DuplicatePct float64       // percentage of packets to duplicate (0–100)
 	CorrPct      float64       // percentage of packets to corrupt (0–100)
+	// ReorderPct is the percentage of packets to deliver out of
+	// order (0–100). It requires a base delay; when Latency is
+	// zero a minimal defaultReorderDelay is synthesized, because
+	// the kernel rejects "netem reorder" without one.
+	ReorderPct float64
 }
 
 func (c NetworkConditions) isZero() bool {
 	return c.Latency == 0 && c.Jitter == 0 &&
-		c.DropPct == 0 && c.DuplicatePct == 0 && c.CorrPct == 0
+		c.DropPct == 0 && c.DuplicatePct == 0 && c.CorrPct == 0 &&
+		c.ReorderPct == 0
 }
 
 // NetworkEmulation attaches tc/netem traffic-control rules to the
@@ -213,6 +229,10 @@ func buildNetemFilter(conds NetworkConditions) string {
 			jitter = conds.Latency / 4
 		}
 		parts = append(parts, "delay", delay, jitter.Round(time.Microsecond).String())
+	} else if conds.ReorderPct > 0 {
+		// Reorder-only conditions get the minimal base delay:
+		// the kernel rejects "netem reorder" without one.
+		parts = append(parts, "delay", defaultReorderDelay.String())
 	}
 
 	if conds.DropPct > 0 {
@@ -225,6 +245,10 @@ func buildNetemFilter(conds NetworkConditions) string {
 
 	if conds.CorrPct > 0 {
 		parts = append(parts, "corrupt", fmt.Sprintf("%.2f%%", conds.CorrPct))
+	}
+
+	if conds.ReorderPct > 0 {
+		parts = append(parts, "reorder", fmt.Sprintf("%.2f%%", conds.ReorderPct))
 	}
 
 	return strings.Join(parts, " ")
