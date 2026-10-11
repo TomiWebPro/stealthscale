@@ -1452,3 +1452,8 @@ Format:
 - commit: 835140b + 0a74af9 (committed by the concurrent stealth-builder from my working tree; my own `git commit` was a no-op — nothing to commit)
 - docs rule: no user flow, CLI surface, or output text changed (one error-status mapping in a race path); no doc enumerates the sentinel→status table (checked docs/ and hscontrol/api/v2/README.md), so no docs update required — the fix makes behavior match the already-documented Tailscale-compat 404 contract
 - note: DEVLOG.md entry appended after the builder's 40a98c5 landed; this entry is left uncommitted per protocol step 8/9 practice (append-only, daily-push job handles it)
+
+## 2026-10-11 20:06 UTC — ss-daily-push
+
+- commits pushed: none — `git push origin main` failed all 3 attempts (initial + 2 retries, 60s apart): `remote: Permission to TomiWebPro/stealthscale.git denied to TomiWebPro.` / `fatal: unable to access 'https://github.com/TomiWebPro/stealthscale.git/': The requested URL returned error: 403`; credential.helper=store authenticates as tomiwebpro (the repo owner) yet push is denied — stored token lacks push permission; not retryable from this environment. Local commit d47e24c (chore: daily sync 2026-10-11 — DEVLOG: ss-maintain cycle entry 2026-10-11 04:04 UTC: api/v2 ErrNodeNotInNodeStore-to-404 mapping fix, new errors_test.go coverage, worker coordination) is committed and awaits the next push with a working credential
+- final HEAD: d47e24c
