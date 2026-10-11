@@ -1319,3 +1319,7 @@ Format:
 - open/ and in-progress/ now empty
 - formatting: prettier --check clean on all 7 files; mdformat --check clean on overview/clients/threat-model (the other 4 were already mdformat-unclean at HEAD — mkdocs material tabs/admonitions, pre-existing). prek's mdformat hook mangles those 4 files (turns `!!! warning` admonitions into code fences, escapes `**` bold) — a rendering regression — so the commit uses `--no-verify` per repo precedent (hooks shell out to nix, absent here); equivalent checks run directly: prettier --check clean, `go build ./...` green, `go test ./hscontrol/xray/... ./cmd/stealthscale/cli/...` green
 - commit: (this commit) docs + DEVLOG.md in one commit per cycle protocol (issues/ is git-ignored, so the issue-file move is local-only)
+
+## 2026-10-11 01:25 UTC — stealth-builder
+
+- concurrency guard passed (lock stale: ss-maintain 01:06:24 UTC, ~18 min old > 15 min threshold — holder's lease expired, no lock touch in 18 min); issues/open/ and issues/in-progress/ empty — cycle aborted (queue empty); one-line DEVLOG entry per protocol, stopping
