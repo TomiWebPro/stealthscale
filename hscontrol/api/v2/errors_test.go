@@ -52,6 +52,7 @@ func TestMapErrorTranslatesSentinels(t *testing.T) {
 		fmt.Errorf("%w: %d", state.ErrNodeNotInNodeStore, types.NodeID(7)))
 	wrappedRenameCollision := fmt.Errorf("renaming device: %w",
 		fmt.Errorf("%w: %s", state.ErrNodeNameNotUnique, "dup"))
+	wrappedUnrelated := fmt.Errorf("setting device tags: %w", errTestDBDown)
 
 	tests := []struct {
 		name string
@@ -81,9 +82,7 @@ func TestMapErrorTranslatesSentinels(t *testing.T) {
 		// Wrapped forms: state wraps every sentinel with %w context.
 		{"wrapped node store miss", wrappedNodeStoreMiss, http.StatusNotFound},
 		{"wrapped rename collision", wrappedRenameCollision, http.StatusBadRequest},
-		{"wrapped unrelated cause",
-			fmt.Errorf("setting device tags: %w", errTestDBDown),
-			http.StatusInternalServerError},
+		{"wrapped unrelated cause", wrappedUnrelated, http.StatusInternalServerError},
 	}
 
 	for _, tc := range tests {
@@ -107,6 +106,7 @@ func TestMapErrorTranslatesSentinels(t *testing.T) {
 
 		err := mapError("deleting device",
 			fmt.Errorf("deleting device: %w", state.ErrNodeNotInNodeStore))
+
 		var em *huma.ErrorModel
 		require.ErrorAs(t, err, &em)
 		require.Len(t, em.Errors, 1)
