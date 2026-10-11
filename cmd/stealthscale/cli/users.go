@@ -18,6 +18,7 @@ import (
 // CLI user errors.
 var (
 	errFlagRequired       = errors.New("--name or --identifier flag is required")
+	errNoUsersMatch       = errors.New("no users match query")
 	errMultipleUsersMatch = errors.New("multiple users match query, specify an ID")
 )
 
@@ -74,11 +75,19 @@ func resolveSingleUser(
 	}
 
 	users := resp.JSON200.Users
-	if len(users) != 1 {
+	switch len(users) {
+	case 1:
+		return id, &users[0], nil
+	case 0:
+		// A query that matches nothing is not the same
+		// failure as one that matches too much: telling
+		// the operator "multiple users match" for a
+		// typo'd name sends them hunting for duplicates
+		// that do not exist.
+		return 0, nil, errNoUsersMatch
+	default:
 		return 0, nil, errMultipleUsersMatch
 	}
-
-	return id, &users[0], nil
 }
 
 func init() {
