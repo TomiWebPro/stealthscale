@@ -1123,6 +1123,7 @@ Format:
 - issues filed: none | issues closed: none (issues/open/ and issues/in-progress/ were empty at cycle start and no promised-feature gap per docs/stealthscale/overview.md surfaced — the OIDC gap was a test gap, fixed directly)
 - commit: 0064dcc (hscontrol: pin OIDC callback CSRF state and nonce guards; --no-verify: prek shells out to nix, absent in this env — equivalent checks run directly: gofmt clean, go vet clean, golangci-lint run --new-from-rev=HEAD ./hscontrol/ 0 issues, new tests + TestOIDCCallbackSSHCheckIdentityBinding green under the pinned GOTOOLCHAIN=go1.26.7)
 - note: DEVLOG.md left uncommitted per protocol step 8/9 (the daily-push job handles it; the file carries other runs' uncommitted append-only entries — the 20:47 UTC stealth-builder skip entry landed mid-cycle — so committing it wholesale would sweep their hunks into this cycle's commit)
+
 ## 2026-10-10 20:59 UTC — stealth-builder: concurrency guard passed (no /tmp/ss/agent.lock held); issues/open/ and issues/in-progress/ both empty — one-line stop per protocol; no code changes, no commit (DEVLOG.md left uncommitted per the 20:46/20:57 precedent: it carries other runs' uncommitted append-only entries and the daily-push job handles it)
 
 ## 2026-10-10 21:06 UTC — stealth-builder
@@ -1160,9 +1161,11 @@ Format:
 - note: DEVLOG.md committed wholesale — its uncommitted hunks were all completed runs' entries (20:06–21:18 UTC; the 21:15 entry's code landed in 8cae8be) and no in-flight run had appended yet; the ss-maintain-20261010-234012 run will append its own entry after this commit
 
 ## 2026-10-10 21:46 UTC — stealth-builder
+
 - skipped (lock held by ss-maintain 2026-10-10 21:40 UTC) — /tmp/ss/agent.lock modified 21:40:24 UTC, ~6 min old (< 15 min; `find /tmp/ss/agent.lock -mmin -15` matched); cycle stopped per concurrency guard, no commit. issues/open/ was empty at cycle start as well, so no work was pending regardless.
 
 ## 2026-10-10 21:50 UTC — ss-maintain
+
 - concurrency guard: passed (no lock held at start); wrote "ss-maintain 2026-10-10 21:40 UTC" to /tmp/ss/agent.lock, refreshed mid-cycle (21:47 UTC), removed at end of cycle while still owned by this run. Mid-cycle observation: the ss-worker run that started 21:25 UTC was in flight with uncommitted cli changes when this cycle began (its guard had passed before my lock existed) — I avoided cmd/stealthscale/cli entirely and staged only my own file; it completed ac290d9 and committed DEVLOG.md wholesale at 21:44 UTC, and a follow-up stealth-builder cycle at 21:46 UTC correctly skipped behind my lock
 - build: `GOTOOLCHAIN=go1.26.7 go build ./...` green (re-verified at final HEAD)
 - tests: `GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green, EXIT=0 (the run spanned the worker's in-flight cli changes, which compiled and passed within it); race skipped (cgo absent in this env — same as prior cycles)
@@ -1173,9 +1176,11 @@ Format:
 - note: DEVLOG.md left uncommitted per protocol step 8/9 (it carries the 21:46 UTC stealth-builder skip entry from another run; the daily-push job handles it)
 
 ## 2026-10-10 21:55 UTC — stealth-builder
+
 - concurrency guard passed (no /tmp/ss/agent.lock); issues/open/ empty (in-progress/ empty too) — cycle stopped per protocol, no commit
 
 ## 2026-10-10 22:16 UTC — ss-maintain
+
 - concurrency guard: passed (no lock held at start); wrote "ss-maintain 2026-10-10 22:00:24 UTC" to /tmp/ss/agent.lock, kept fresh mid-cycle, removed at end of cycle while still owned by this run
 - build: `GOTOOLCHAIN=go1.26.7 go build ./...` green
 - tests: `GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green, EXIT=0 (hscontrol 213s, servertest 243s, mapper 44s, state 23s, db 11s, policy/v2 11s, webui 0.14s, cli 1.3s, xray 1.0s); race skipped (cgo absent in this env — same as prior cycles); re-ran ./hscontrol/xray/ and the WebUI servertests after the fix (xray 1.0s, TestWebUI* 15.7s)
@@ -1187,6 +1192,7 @@ Format:
 - note: DEVLOG.md left uncommitted per protocol step 8/9 (it carries other runs' append-only entries; the daily-push job handles it)
 
 ## 2026-10-10 22:31 UTC — ss-maintain
+
 - concurrency guard: passed (no lock held at start); wrote "ss-maintain 2026-10-10T22:20Z" to /tmp/ss/agent.lock, refreshed mid-cycle (22:26 UTC), removed at end of cycle while still owned by this run
 - build: `GOTOOLCHAIN=go1.26.7 go build ./...` green
 - tests: `GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green, EXIT=0 (servertest 242s, mapper 38s, state 24s, policy/v2 11s, cli 1.3s, xray 1.0s, webui 0.09s); race skipped (cgo absent in this env — same as prior cycles)
@@ -1197,15 +1203,19 @@ Format:
 - note: DEVLOG.md left uncommitted per protocol step 8/9 (it carries other runs' append-only entries from 21:46–22:16 UTC; the daily-push job handles it)
 
 ## 2026-10-10 22:33 UTC — stealth-builder
+
 - concurrency guard passed (no /tmp/ss/agent.lock); issues/open/ empty (in-progress/ empty too) — cycle stopped per protocol, no commit
 
 ## 2026-10-10 22:36 UTC — stealth-builder
+
 - concurrency guard passed (no /tmp/ss/agent.lock); issues/open/ empty (in-progress/ empty too) — cycle stopped per protocol, no commit
 
 ## 2026-10-10 22:54 UTC — stealth-builder
+
 - concurrency guard passed (no /tmp/ss/agent.lock); issues/open/ empty (in-progress/ empty too; the 21 closed issues briefly visible in open/ at 22:52 UTC were ss-maintain re-verification churn — closed/ → open/ → closed/, back in closed/ with status: done within seconds) — cycle stopped per protocol, no commit
 
 ## 2026-10-10 22:55 UTC — stealth-builder
+
 - concurrency guard tripped: /tmp/ss/agent.lock ("ss-maintain 2026-10-10 22:54 UTC", mtime 22:54:29 UTC — written seconds ago by the still-running ss-maintain cycle, PID 1442348) is fresher than 15 min; cycle skipped per protocol (issues/open/ and issues/in-progress/ were also empty at check time). No commit; DEVLOG.md left uncommitted for the daily-push job as in prior cycles
 
 ## 2026-10-10 23:05 UTC — stealth-builder
@@ -1215,6 +1225,7 @@ Format:
 - no commit; DEVLOG.md left uncommitted for the daily-push job per ownership rules (a commit would sweep ss-maintain's in-flight DEVLOG entries and untracked test file into this cycle's commit)
 
 ## 2026-10-10 23:08 UTC — ss-maintain
+
 - concurrency guard: passed (no lock held at start); wrote "ss-maintain 2026-10-10 22:54 UTC" to /tmp/ss/agent.lock, refreshed mid-cycle (23:08 UTC), removed at end of cycle while still owned by this run
 - build: `GOTOOLCHAIN=go1.26.7 go build ./...` green — but only after a workaround: the first run failed at link with "mapping output file failed: disk quota exceeded". /tmp is a tmpfs mounted with usrquota and this user's /tmp quota is exhausted (/tmp/opencode alone is 3.1G; `dd` could write only 77MB before EDQUOT even though `df` showed 1.6G free — quota, not space). Re-ran with `GOTMPDIR=/home/tomi/.gotmp TMPDIR=/home/tomi/.gotmp` (root fs, 210G free) — green. Future cycles in this env need the same redirect: the go linker and `t.TempDir()` both land on the /tmp quota otherwise
 - tests: `GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green, EXIT=0 (hscontrol 220s, servertest 242s, mapper 45s, state 27s, db 12s, policy/v2 12s, cli 1.3s, xray 1.0s, webui 0.12s, derp/server 0.009s); race skipped (cgo absent in this env — same as prior cycles)
@@ -1226,16 +1237,19 @@ Format:
 - note: DEVLOG.md left uncommitted per protocol step 8/9 (it carries other runs' append-only entries from 22:33–22:54 UTC; the daily-push job handles it)
 
 ## 2026-10-10 23:16 UTC — stealth-builder
+
 - concurrency guard tripped: /tmp/ss/agent.lock ("ss-maintain 2026-10-10 23:10 UTC", mtime 23:10:25 UTC, ~6 min old — fresher than the 15-min threshold; ss-maintain PID 1448337, run ss-maintain-20261011-011000, still in flight) — cycle skipped per protocol
 - also: issues/open/ and issues/in-progress/ both empty — queue empty regardless
 - no commit; DEVLOG.md left uncommitted for the daily-push job per ownership rules (a commit would sweep ss-maintain's in-flight DEVLOG entries into this cycle's commit)
 
 ## 2026-10-10 23:25 UTC — stealth-builder
+
 - concurrency guard tripped: /tmp/ss/agent.lock ("ss-maintain 2026-10-10 23:10 UTC", mtime 23:22:04 UTC, ~3 min old — fresher than the 15-min threshold; ss-maintain still in flight — its uncommitted DEVLOG.md entries and hscontrol/servertest/xray_vless_test.go changes are in the working tree) — cycle skipped per protocol
 - also: issues/open/ holds one issue (202610102321-vless-override-rebind-no-rollback.md; in-progress/ empty) but the guard takes precedence — skipped regardless
 - no commit; DEVLOG.md left uncommitted for the daily-push job per ownership rules (a commit would sweep ss-maintain's in-flight DEVLOG entries and uncommitted test file into this cycle's commit)
 
 ## 2026-10-10 23:26 UTC — ss-maintain
+
 - concurrency guard: passed (no lock held at start); wrote "ss-maintain 2026-10-10 23:10 UTC" to /tmp/ss/agent.lock, refreshed mid-cycle (23:25 UTC), removed at end of cycle while still owned by this run
 - build: `GOTOOLCHAIN=go1.26.7 GOTMPDIR=/home/tomi/.gotmp TMPDIR=/home/tomi/.gotmp go build ./...` green (the /tmp redirect from the 23:08 cycle is still required — /tmp is on the exhausted usrquota tmpfs; root fs has 210G free)
 - tests: `GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green, EXIT=0 (hscontrol 219s, servertest 240s, mapper 35s, state 26s, policy/v2 12s, db 12s, cli 1.3s, xray 1.0s, webui 0.12s, derp/server 0.011s); race skipped (cgo absent in this env — same as prior cycles); re-ran the full ./hscontrol/servertest after adding the new test (240.9s, green)
@@ -1247,11 +1261,13 @@ Format:
 - note: DEVLOG.md left uncommitted per protocol step 8/9 (it carries other runs' append-only entries; the daily-push job handles it)
 
 ## 2026-10-10 23:35 UTC — stealth-builder
+
 - concurrency guard tripped: /tmp/ss/agent.lock ("ss-maintain 2026-10-10 23:30 UTC", mtime 23:30:37 UTC, ~5 min old — fresher than the 15-min threshold; ss-maintain PID 1455314, run ss-maintain-20261011-013004, still in flight — visible in ps) — cycle skipped per protocol
 - issues/open/ holds one issue (202610102321-vless-override-rebind-no-rollback.md; in-progress/ empty) but the guard takes precedence — skipped regardless
 - no commit; DEVLOG.md left uncommitted for the daily-push job per ownership rules (a commit would sweep ss-maintain's in-flight DEVLOG entries into this cycle's commit)
 
 ## 2026-10-10 23:44 UTC — ss-maintain
+
 - concurrency guard: passed (no lock held at start); wrote "ss-maintain 2026-10-10 23:30 UTC" to /tmp/ss/agent.lock, refreshed mid-cycle, removed at end of cycle while still owned by this run
 - build: `GOTOOLCHAIN=go1.26.7 GOTMPDIR=/home/tomi/.gotmp TMPDIR=/home/tomi/.gotmp go build ./...` green (the /tmp redirect from the 23:08 cycle is still required — /tmp is on the exhausted usrquota tmpfs; root fs has 210G free)
 - tests: `GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green, EXIT=0 (hscontrol 219s, servertest 243s, mapper 44s, state 26s, policy/v2 11s, db 12s, cli 1.3s, xray 1.0s, webui 0.11s, derp 0.02s); race skipped (cgo absent in this env — same as prior cycles); re-ran ./hscontrol/state after adding the new test (26.2s, green)
@@ -1263,6 +1279,7 @@ Format:
 - note: DEVLOG.md left uncommitted per protocol step 8/9 (it carries other runs' append-only entries; the daily-push job handles it)
 
 ## 2026-10-11 00:05 UTC — ss-maintain
+
 - concurrency guard tripped: /tmp/ss/agent.lock exists with fresh mtime (00:05:32 UTC, < 15 min old) — the guard's skip condition is met. The file is 0 bytes: this cycle's own lock write failed with "Disk quota exceeded" (EDQUOT — /tmp sits on the exhausted usrquota tmpfs documented since the 23:08 cycle; open() succeeded, write() did not). Per the removal rule the lock is NOT removed at cycle end (it does not contain this run's line).
 - substantive reason to skip regardless of the lock: an ss-worker run (PID 1460840, title ss-worker-20261011-014538, started 23:45 UTC) is in flight in this tree — it claimed issues/in-progress/202610102321-vless-override-rebind-no-rollback.md and holds ~625 lines of uncommitted changes (the SetNodeVLESS store-rollback fix in hscontrol/state/vless.go, hscontrol/xray/server.go, matching tests in hscontrol/state + hscontrol/xray + hscontrol/servertest, docs/stealthscale/overview.md, docs/usage/webui.md, CHANGELOG.md) with its verification run `go test -count=1 -short ./hscontrol/servertest/` (PID 1465597, started 23:59 UTC) still executing. Working now would risk sweeping the worker's uncommitted files into a commit and CPU-contending its verification run.
 - build/tests: not run this cycle (worker owns the tree); no code changes; no commit
@@ -1280,9 +1297,11 @@ Format:
 - issue closed: `202610102321-vless-override-rebind-no-rollback` (moved in-progress/ → closed/ with resolution summary)
 
 ## 2026-10-11 00:10 UTC — ss-maintain: skipped (lock held by )
+
 - note: /tmp/ss/agent.lock exists with mtime < 15 min old (fresh) but contains an empty holder line — likely a concurrent agent mid-cycle (stealth-builder's entry is the latest in this log); no build/test run performed this cycle
 
 ## 2026-10-11 00:26 UTC — ss-maintain
+
 - concurrency guard: passed (stale empty lock, mtime >15 min); wrote "ss-maintain 2026-10-11 00:26 UTC" to /tmp/ss/agent.lock, refreshed mid-cycle, removed at end of cycle while still owned by this run
 - build: `GOTOOLCHAIN=go1.26.7 GOTMPDIR=/home/tomi/.gotmp TMPDIR=/home/tomi/.gotmp go build ./...` green
 - tests: `go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green, EXIT=0 (servertest 244s, mapper 44s, state 26s, policy/v2 12s, xray 1.0s, cli 1.3s, util 0.02s); race skipped (cgo absent in this env — same as prior cycles)
@@ -1296,6 +1315,7 @@ Format:
 ## 2026-10-11 00:28 UTC — ss-builder: nothing to do — issues/open/ and issues/in-progress/ both empty (guard passed: no /tmp/ss/agent.lock present); one-line DEVLOG entry per protocol, stopping
 
 ## 2026-10-11 00:58 UTC — ss-maintain
+
 - concurrency guard: passed (no /tmp/ss/agent.lock); wrote "ss-maintain 2026-10-11T00:36Z", kept fresh mid-cycle, removed at end while still owned by this run
 - build: `go build ./...` green
 - tests: `go test -short ./hscontrol/... ./cmd/...` under the ambient go1.27.1 → 3 failures, ALL the known closed issue 202610082015 root cause (Go 1.27 encoding/json rejects the `format:nano` tag on upstream tailcfg.SSHAction.SessionDuration): testcapture TestWriteReadRoundtrip_SSH + TestWrite_SSH_StatsUseSSHRules, and a third manifestation not listed in that issue — servertest TestSSHCheckReDelegatesWhenSessionMissing answers 500 on the /machine/ssh/action poll because the response body marshals tailcfg.SSHAction (server log: "failed to encode SSH action response"). Under the repo's canonical pinned toolchain (GOTOOLCHAIN=go1.26.7 per Makefile): full scope green — servertest ok (244.6s) and every other package in ./hscontrol/... ./cmd/... ok. The tagged type lives in the tailscale.com dependency (not editable in this repo); the Makefile toolchain pin is the repo's resolution, so no code change and no new issue (same root cause as the closed one — a duplicate filing would violate the one-issue-per-problem rule)
@@ -1325,6 +1345,7 @@ Format:
 - concurrency guard passed (lock stale: ss-maintain 01:06:24 UTC, ~18 min old > 15 min threshold — holder's lease expired, no lock touch in 18 min); issues/open/ and issues/in-progress/ empty — cycle aborted (queue empty); one-line DEVLOG entry per protocol, stopping
 
 ## 2026-10-11 01:32 UTC — ss-maintain
+
 - concurrency guard: passed (no /tmp/ss/agent.lock); wrote "ss-maintain Sun Oct 11 01:06:24 AM UTC 2026", kept it for the cycle, removed at end while still owned by this run
 - build: `GOTOOLCHAIN=go1.26.7 go build ./...` green
 - tests: `go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green, EXIT=0 (servertest 243.6s, hscontrol 220.1s, mapper 44.7s, state 28.0s, policy/v2 11.4s, db 12.4s, xray 1.0s, cli 1.3s); race skipped (cgo absent in this env — same as prior cycles)
@@ -1356,6 +1377,7 @@ Format:
 - commit: code files only (state.go, vless.go, vless_test.go); DEVLOG.md left uncommitted — it carries ss-maintain's 01:32 UTC and other stealth-builder runs' in-flight append-only entries plus ss-maintain's in-flight capver_test.go changes, and sweeping them into this commit would violate ownership (70bcc76 precedent; the daily-push job handles DEVLOG.md)
 
 ## 2026-10-11 01:58 UTC — ss-maintain
+
 - concurrency guard: passed (no /tmp/ss/agent.lock); wrote "ss-maintain 2026-10-11T01:40Z", kept it for the cycle, removed at end while still owned by this run
 - build: `GOTOOLCHAIN=go1.26.7 go build ./...` green (ambient go1.27.1 must not be used — the known closed issue 202610082015 `format:nano` failures)
 - tests: `GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green, EXIT=0 (servertest 248.0s, hscontrol 215.5s, mapper 38.9s, state 24.1s, db 11.5s, policy/v2 11.5s, xray 1.0s, cli 1.3s); race skipped (cgo absent in this env, same as prior cycles)
@@ -1369,6 +1391,7 @@ Format:
 - note: DEVLOG.md left uncommitted per protocol step 8 (it carries other runs' append-only entries; the daily-push job handles it)
 
 ## 2026-10-11 02:09 UTC — ss-maintain
+
 - concurrency guard: passed (no /tmp/ss/agent.lock); wrote "ss-maintain 2026-10-11 02:00 UTC", kept it for the cycle, removed at end while still owned by this run
 - build: `GOTOOLCHAIN=go1.26.7 go build ./...` green at cycle start. NOTE: at cycle end the tree is transiently build-broken by the ss-worker's IN-FLIGHT uncommitted WIP (state.go + vless.go, adding vlessAppliedState for in-progress issue 202610110156-vless-concurrent-apply-rollback-race — worker process still running, 14+ min elapsed). This is mid-edit agent WIP, not committed repo state — left strictly alone to avoid colliding with the worker; the worker owns those files and verifies its own build before its commit
 - tests: `GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/...` — all packages green (servertest 246.2s, hscontrol 216.0s, mapper 41.0s, state 28.3s, policy/v2 17.9s, db 15.0s, cli 1.3s, …). Three spurious failures (sqliteconfig ping, webui/xray test-binary link) were all "disk quota exceeded" on the /tmp tmpfs from concurrent agent test runs — retried green with TMPDIR on the big disk; also pruned 3620 stale /tmp/stealthscale-db-test-* dirs (3.7G freed). Ambient go1.27.1 must not be used (known closed issue 202610082015 format:nano failures)
@@ -1380,6 +1403,7 @@ Format:
 - note: DEVLOG.md left uncommitted per protocol step 8 (it carries other runs' append-only entries, including the worker's in-flight uncommitted entry; the daily-push job handles it)
 
 ## 2026-10-11 02:29 UTC — ss-maintain
+
 - concurrency guard: passed (no /tmp/ss/agent.lock); wrote "ss-maintain 2026-10-11T02:20Z", kept it for the cycle, removed at end while still owned by this run
 - build: `GOTOOLCHAIN=go1.26.7 go build ./...` green (ambient go1.27.1 must not be used — known closed issue 202610082015)
 - tests: `GOTOOLCHAIN=go1.26.7 TMPDIR=/home/tomi/.ss-tmp go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green, EXIT=0 (TMPDIR on the big disk to avoid /tmp tmpfs contention with the concurrent ss-worker servertest run; race skipped — cgo absent in this env, same as prior cycles)
@@ -1394,6 +1418,7 @@ Format:
 - note: DEVLOG.md left uncommitted per protocol step 8 (it carries other runs' append-only entries, including the worker's in-flight ones; the daily-push job handles it)
 
 ## 2026-10-11 03:03 UTC — ss-maintain
+
 - concurrency guard: passed (no /tmp/ss/agent.lock); wrote "ss-maintain 2026-10-11T02:46Z", kept it for the cycle, removed at end while still owned by this run
 - build: `GOTOOLCHAIN=go1.26.7 go build ./...` green (ambient go1.27.1 must not be used — known closed issue 202610082015)
 - tests: `GOTOOLCHAIN=go1.26.7 TMPDIR=/home/tomi/.ss-tmp go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green, EXIT=0. Run twice: once against the ss-worker's in-flight WIP tree, then re-run against the committed tree after the worker landed 7913e5d mid-cycle; the committed ./hscontrol/state package re-verified separately (27.9s). race skipped — cgo absent in this env, same as prior cycles
@@ -1442,9 +1467,10 @@ Format:
 - concurrency guard: skipped (lock held by ss-maintain 2026-10-11T03:40:22Z, `find -mmin -15` matched, holder PID 1569593 still running); issues/open/ and in-progress/ both empty — one-line entry appended, cycle stopped, no commit (DEVLOG.md carries ss-maintain's in-flight uncommitted changes; daily-push job handles it)
 
 ## 2026-10-11 04:04 UTC — ss-maintain
+
 - concurrency guard: passed at 03:40 UTC (no lock); wrote "ss-maintain 2026-10-11T03:40:22Z". The lock went stale mid-cycle during the long test suite (should have re-touched on long steps), which let a concurrent stealth-builder cycle proceed
 - build: `GOTOOLCHAIN=go1.26.7 go build ./...` green
-- tests: `GOTOOLCHAIN=go1.26.7 TMPDIR=/home/tomi/.ss-tmp go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green (hscontrol 226s, servertest 244s, mapper 42s, state 33s, db 17s, policy/v2 19s, api/v2 0.02s). race skipped (cgo absent, same as prior cycles). One FAIL seen in a *parallel* coverage invocation I ran alongside the suite (TestVLESSNodeOverrideConflictingPortFailsClosed, dial 127.0.0.1:41422 refused) — my own two concurrent suites contending for ports; passed in isolation (1.09s) and in the authoritative suite run; toolchain artifact, not a code bug
+- tests: `GOTOOLCHAIN=go1.26.7 TMPDIR=/home/tomi/.ss-tmp go test -short -count=1 ./hscontrol/... ./cmd/...` — all 27 packages green (hscontrol 226s, servertest 244s, mapper 42s, state 33s, db 17s, policy/v2 19s, api/v2 0.02s). race skipped (cgo absent, same as prior cycles). One FAIL seen in a _parallel_ coverage invocation I ran alongside the suite (TestVLESSNodeOverrideConflictingPortFailsClosed, dial 127.0.0.1:41422 refused) — my own two concurrent suites contending for ports; passed in isolation (1.09s) and in the authoritative suite run; toolchain artifact, not a code bug
 - bug found by reading code (not from a failing test): hscontrol/api/v2 mapError was missing state.ErrNodeNotInNodeStore. RenameNode, SetNodeTags, SetNodeExpiry, and SetApprovedRoutes (all called by v2 device handlers setDeviceName/setDeviceTags/setDeviceKey/setDeviceRoutes) return that sentinel wrapped with %w when the node vanishes between the handler's lookupNode and the state mutation (delete race). v2 fell through to 500 while v1 maps it to 404 — the Tailscale Go client/tscli/Terraform provider key IsNotFound() off the 404 status, so a gone device surfaced as a retryable server error. Fixed: one line added to the 404 case (hscontrol/api/v2/errors.go). Reachability was traced per-sentinel: the other v1-only sentinels (ErrNodeNotFoundRegistrationCache, ErrRegistrationExpired, ErrNodeMarkedTaggedButHasNoTags, ErrNodeHasNeitherUserNorTags, ErrUserStillHasNodes, ErrCannotChangeOIDCUser, ErrSingleUseAuthKeyHasBeenUsed, the 409 pair) are not reachable from any v2 handler (registration/user-deletion/validation paths only), so they stay unmapped
 - test added (every-run rule; failure-point, product direction #3): hscontrol/api/v2/errors_test.go (package was 12.8% covered, only guard/oauth tests existed) — pins the full sentinel→status table in bare and %w-wrapped form, tailscaleErrorTransformer (detail-becomes-message, title fallback, data.errors carry-through, non-ErrorModel passthrough), the end-to-end wire shape via humatest (GET /api/v2/device/notanumber → 404 + {"message","status"} body, failing in parseNodeID before any State access so a zero Backend is safe), bearerOrBasicToken edge cases (Basic-as-username, empty/garbage headers fail closed), expirySeconds rounding (hair-early expiry rounds up to 86400, sub-second down, negative clamps to 0, nil→0), parseID 404-on-garbage/overflow, requireDefaultTailnet, emptyIfNil. Mutation-validated both directions: dropping the sentinel from the 404 case fails exactly the two ErrNodeNotInNodeStore subtests (500 vs 404); swapping the transformer's detail/title priority fails the transformer tests and the wire-shape test. Package coverage 12.8%→21.6%. 0.02s, no Docker
 - worker coordination: a concurrent stealth-builder cycle committed my uncommitted working tree mid-cycle — 835140b (api/v2: map ErrNodeNotInNodeStore to 404 Not Found = my errors.go fix + errors_test.go) and 0a74af9 (api/v2: tidy error-mapping test fixtures = the same three lint tidies I was applying: wrappedUnrelated var, blank line before var em — identical to my final edits) — and 40a98c5 (devlog: record 2026-10-11 maintainer cycles) committed the accumulated DEVLOG.md entries prior cycles had left uncommitted. My own commit attempt then found nothing to commit; the committed tree is byte-identical to my final lint-clean, fully-verified version (gofmt clean, go vet clean, golangci-lint --new-from-rev=HEAD 0 issues, full short suite green, re-verified post-commit)
@@ -1457,3 +1483,8 @@ Format:
 
 - commits pushed: none — `git push origin main` failed all 3 attempts (initial + 2 retries, 60s apart): `remote: Permission to TomiWebPro/stealthscale.git denied to TomiWebPro.` / `fatal: unable to access 'https://github.com/TomiWebPro/stealthscale.git/': The requested URL returned error: 403`; credential.helper=store authenticates as tomiwebpro (the repo owner) yet push is denied — stored token lacks push permission; not retryable from this environment. Local commit d47e24c (chore: daily sync 2026-10-11 — DEVLOG: ss-maintain cycle entry 2026-10-11 04:04 UTC: api/v2 ErrNodeNotInNodeStore-to-404 mapping fix, new errors_test.go coverage, worker coordination) is committed and awaits the next push with a working credential
 - final HEAD: d47e24c
+
+## 2026-10-13 20:04 UTC — ss-daily-push
+
+- commits pushed: none — `git push origin main` failed all 3 attempts (initial + 2 retries, 60s apart): `remote: Permission to TomiWebPro/stealthscale.git denied to TomiWebPro.` / `fatal: unable to access 'https://github.com/TomiWebPro/stealthscale.git/': The requested URL returned error: 403`; identical credential failure to the 2026-10-11 20:06 UTC cycle — stored token still lacks push permission; not retryable from this environment. Working tree was clean (nothing new to commit); 2 local commits still await a push with a working credential: d47e24c (chore: daily sync 2026-10-11) + 9591c9e (devlog: ss-daily-push 2026-10-11)
+- final HEAD: 9591c9e
