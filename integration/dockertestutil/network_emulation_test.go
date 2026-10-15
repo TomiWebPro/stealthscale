@@ -38,20 +38,20 @@ func TestFindContainerInterface(t *testing.T) {
 			wantErr:   false,
 		},
 		{
-			name: "empty input returns error",
-			input: "",
+			name:      "empty input returns error",
+			input:     "",
 			wantIFace: "",
 			wantErr:   true,
 		},
 		{
-			name: "loopback only returns error",
-			input: `1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65535`,
+			name:      "loopback only returns error",
+			input:     `1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65535`,
 			wantIFace: "",
 			wantErr:   true,
 		},
 		{
-			name: "malformed lines skipped gracefully",
-			input: "short line\nmore garbage",
+			name:      "malformed lines skipped gracefully",
+			input:     "short line\nmore garbage",
 			wantIFace: "",
 			wantErr:   true,
 		},
@@ -229,6 +229,11 @@ func TestBuildNetemFilter(t *testing.T) {
 			want:  "drop 10.50%",
 		},
 		{
+			name:  "rate limit only",
+			conds: NetworkConditions{RateKbps: 256}, //nolint:exhaustruct_v5 // test fixture: only field under test
+			want:  "rate 256kbit",
+		},
+		{
 			name:  "duplication only",
 			conds: NetworkConditions{DuplicatePct: 5.0},
 			want:  "duplicate 5.00%",
@@ -255,6 +260,18 @@ func TestBuildNetemFilter(t *testing.T) {
 			want: "delay 300ms 75ms drop 20.00%",
 		},
 		{
+			// A slow link: latency for propagation delay plus a
+			// throughput cap. Either primitive alone cannot
+			// express a bandwidth-starved relay.
+			name: "combined latency + loss + rate",
+			conds: NetworkConditions{ //nolint:exhaustruct_v5 // test fixture: only fields under test
+				Latency:  300 * time.Millisecond,
+				DropPct:  20,
+				RateKbps: 512,
+			},
+			want: "delay 300ms 75ms drop 20.00% rate 512kbit",
+		},
+		{
 			name: "combined latency + reorder",
 			conds: NetworkConditions{ //nolint:exhaustruct_v5 // test fixture: only fields under test
 				Latency:    100 * time.Millisecond,
@@ -268,11 +285,12 @@ func TestBuildNetemFilter(t *testing.T) {
 				Latency:      150 * time.Millisecond,
 				Jitter:       30 * time.Millisecond,
 				DropPct:      5.5,
+				RateKbps:     1024,
 				DuplicatePct: 2.0,
 				CorrPct:      0.25,
 				ReorderPct:   1.5,
 			},
-			want: "delay 150ms 30ms drop 5.50% duplicate 2.00% corrupt 0.25% reorder 1.50%",
+			want: "delay 150ms 30ms drop 5.50% rate 1024kbit duplicate 2.00% corrupt 0.25% reorder 1.50%",
 		},
 	}
 
@@ -283,5 +301,17 @@ func TestBuildNetemFilter(t *testing.T) {
 				t.Errorf("buildNetemFilter(%+v) = %q, want %q", tt.conds, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNetworkConditionsIsZero(t *testing.T) {
+	if !(NetworkConditions{}).isZero() { //nolint:exhaustruct_v5 // test fixture: zero value is the subject
+		t.Errorf("NetworkConditions{}.isZero() = false, want true")
+	}
+	// A rate-only condition is a real condition: Apply must install
+	// the qdisc (and, on a preset emulator, must not fall back to
+	// the preset).
+	if (NetworkConditions{RateKbps: 1}).isZero() { //nolint:exhaustruct_v5 // test fixture: only field under test
+		t.Errorf("NetworkConditions{RateKbps: 1}.isZero() = true, want false")
 	}
 }

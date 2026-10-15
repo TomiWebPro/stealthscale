@@ -60,12 +60,18 @@ type NetworkConditions struct {
 	// zero a minimal defaultReorderDelay is synthesized, because
 	// the kernel rejects "netem reorder" without one.
 	ReorderPct float64
+	// RateKbps caps sustained throughput in kilobits per second
+	// (0 = unlimited), expressed to tc/netem as "rate <N>kbit".
+	// Latency and loss primitives do not constrain throughput, so
+	// this is the only way to emulate a slow link — e.g. a
+	// bandwidth-starved DERP relay or a throttled uplink.
+	RateKbps uint64
 }
 
 func (c NetworkConditions) isZero() bool {
 	return c.Latency == 0 && c.Jitter == 0 &&
 		c.DropPct == 0 && c.DuplicatePct == 0 && c.CorrPct == 0 &&
-		c.ReorderPct == 0
+		c.ReorderPct == 0 && c.RateKbps == 0
 }
 
 // NetworkEmulation attaches tc/netem traffic-control rules to the
@@ -237,6 +243,10 @@ func buildNetemFilter(conds NetworkConditions) string {
 
 	if conds.DropPct > 0 {
 		parts = append(parts, "drop", fmt.Sprintf("%.2f%%", conds.DropPct))
+	}
+
+	if conds.RateKbps > 0 {
+		parts = append(parts, "rate", fmt.Sprintf("%dkbit", conds.RateKbps))
 	}
 
 	if conds.DuplicatePct > 0 {
