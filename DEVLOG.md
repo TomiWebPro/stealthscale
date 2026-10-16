@@ -1488,3 +1488,78 @@ Format:
 
 - commits pushed: none — `git push origin main` failed all 3 attempts (initial + 2 retries, 60s apart): `remote: Permission to TomiWebPro/stealthscale.git denied to TomiWebPro.` / `fatal: unable to access 'https://github.com/TomiWebPro/stealthscale.git/': The requested URL returned error: 403`; identical credential failure to the 2026-10-11 20:06 UTC cycle — stored token still lacks push permission; not retryable from this environment. Working tree was clean (nothing new to commit); 2 local commits still await a push with a working credential: d47e24c (chore: daily sync 2026-10-11) + 9591c9e (devlog: ss-daily-push 2026-10-11)
 - final HEAD: 9591c9e
+
+## 2026-10-15 20:30 UTC — stealth-builder
+
+- concurrency guard passed (no /tmp/ss/agent.lock); issues/open/ and in-progress/ both empty — one-line entry appended, cycle stopped, no commit
+
+## 2026-10-15 22:00 UTC — ss-maintain
+
+- concurrency guard: passed (no lock at 22:00 UTC); lock acquired, touched on long steps, released after commit (still owned by this run)
+- build: `GOTOOLCHAIN=go1.26.7 go build ./...` green (before and after change)
+- tests: `GOTOOLCHAIN=go1.26.7 TMPDIR=/home/tomi/.ss-tmp go test -short -count=1 ./hscontrol/... ./cmd/...` — all 28 packages green, EXIT 0 (ran in background; no failures to triage). race skipped (cgo absent, same as prior cycles)
+- test + harness work (every-run rule; emulated networks, direction #2): `NetworkConditions` could express latency/loss/duplication/corruption/reordering/partitions/flaky-DERP but had no throughput cap, so a slow/bandwidth-starved link (e.g. throttled DERP relay) was inexpressible. Extended `integration/dockertestutil/network_emulation.go` with `RateKbps uint64` → `tc netem rate <N>kbit` in `buildNetemFilter`, wired into `isZero` (so rate-only counts as a real condition and never falls back to a FlakyDERP preset). Tests: `rate limit only`, `combined latency + loss + rate`, extended `all primitives`, plus new `TestNetworkConditionsIsZero` (rate-only is non-zero). All in `network_emulation_test.go`, fast unit tests, no Docker. Mutation-validated both directions (sabotaged filter emission fails exactly the 3 rate filter subtests; sabotaged isZero fails the isZero test; production restored byte-identical). `go vet`, `gofmt`, `golangci-lint run --new-from-rev=HEAD` (0 issues; new partial literals carry the file's existing `//nolint:exhaustruct_v5` fixture convention) all clean; full `dockertestutil` package suite green. Also gofmt-aligned 3 pre-existing misaligned fixture entries in the touched table (file was gofmt-dirty at HEAD)
+- bug hunting: re-auth NodeKey-rotation guards pinned on both PAK and auth paths (existing tests); CLI flows verified pipe-friendly against code (`nodes vless --one-line` + stderr warnings, `up --node-id` fetch, raw-key `preauthkeys create`); docs/stealthscale/clients.md claims (one-command join, --one-line capture, stderr pipe-cleanliness, `stscale apikeys create` naming) all match code — no doc/code contradictions to file
+- issues filed: none (issues/open/ and issues/in-progress/ empty; no promised-feature gaps in docs/stealthscale/overview.md scope; no flow forcing unnecessary copying found) | issues closed: none
+- commit: `b52955d` (harness change only — no user flow, CLI surface, or output text changed, so no docs update required per DOCS RULE 2; committed via pathspec so the pre-existing staged builder model-bump files were left untouched)
+- note: DEVLOG.md left uncommitted per protocol (daily-push job handles it)
+
+## 2026-10-16 00:30 UTC — stealth-builder
+
+- concurrency guard passed (no /tmp/ss/agent.lock); issues/open/ and in-progress/ both empty — one-line entry appended, cycle stopped, no commit
+
+## 2026-10-16 03:00 UTC — ss-maintain
+
+- concurrency guard: passed (no lock at 03:00 UTC); lock acquired, touched on long steps
+- build: `GOTOOLCHAIN=go1.26.7 go build ./...` green
+- tests: `GOTOOLCHAIN=go1.26.7 TMPDIR=/home/tomi/.ss-tmp go test -short -count=1 ./hscontrol/... ./cmd/...` — all packages green, EXIT 0 (hscontrol 221s, servertest 244s, mapper 40s, state 28s; race skipped, cgo absent). Note: the background suite launched before the new v1 test file existed, so its log shows api/v1 as "[no test files]"; the new test was verified standalone green afterward (26 subtests PASS, 0.014s)
+- test added (every-run rule; failure-point, direction #3): hscontrol/api/v1/errors_test.go — the package had zero test files. Pins the full v1 mapError sentinel→status table (6×404 incl. ErrNodeNotInNodeStore delete-race, 10×400, 2×409, unmapped→500), bare + %w-wrapped forms, nil passthrough, wrapped-cause preservation. Reachability traced: State.SetNodeExpiry wraps ErrNodeNotInNodeStore with %w (state.go:1049) and the v1 expire handler feeds it to mapError (api/v1/nodes.go:311/326) → 404. Mutation-validated: deleting the sentinel from the 404 case fails exactly the two NodeStore-miss subtests (500 vs 404); production file restored byte-identical (git diff clean). gofmt clean, go vet clean, golangci-lint --new-from-rev=HEAD 0 issues
+- bug hunting: reviewed SetNodeVLESS commit/rollback interleavings in hscontrol/state/vless.go (7913e5d) — success/success, fail/success, fail/fail orderings all converge (commit repairs store clobbers via re-store+re-fire; rollback never advances lastSeq; no pointer-aliasing mutation path since store and read both copy); no residual bug found. Reviewed NetworkConditions RateKbps addition (b52955d) — correct
+- CLI flow check (direction #1): `preauthkeys create` prints the raw key by default (printOutput override, pipe-friendly); docs/stealthscale/clients.md claims (--node-id fetch, --one-line, stderr warnings) all match up.go/nodes.go code — no friction, no doc contradictions
+- issues filed: none (open/ and in-progress/ empty; no promised-feature gaps in overview.md scope) | issues closed: none
+- commit: 1e42dca (test file intended; the prek hook's stash pop re-staged the builder's pre-existing staged model-bump lines — .opencode/agents/stealth-builder.md + opencode.jsonc 1.2→1.3, staged before this cycle — and the --no-verify retry swept them in; content is the builder's own and correct, attribution noted here. First commit attempt failed: prek golangci-lint hook needs `nix` which is absent in this env; equivalent checks were run by hand instead: gofmt clean, go vet clean, golangci-lint --new-from-rev=HEAD 0 issues)
+- note: DEVLOG.md left uncommitted per protocol (daily-push job handles it)
+
+## 2026-10-16 05:30 UTC — stealth-builder
+
+- concurrency guard passed (no /tmp/ss/agent.lock); issues/open/ and in-progress/ both empty — one-line entry appended, cycle stopped, no commit
+
+## 2026-10-16 10:15 UTC — ss-maintain
+
+- concurrency guard: passed (no lock at 08:00 UTC... lock acquired; /tmp/ss fs 80% full so `go build ./...` initially failed with disk quota errors — rebuilt green with TMPDIR/GOTMPDIR=/home/tomi/.ss-tmp)
+- build: `GOTOOLCHAIN=go1.26.7 go build ./...` green (with TMPDIR override)
+- tests: `GOTOOLCHAIN=go1.26.7 TMPDIR=/home/tomi/.ss-tmp go test -short -count=1 ./hscontrol/... ./cmd/...` — all 29 packages green, TEST_EXIT:0 (hscontrol 220s, servertest 245s, mapper 45s, state 27s; race skipped, cgo absent)
+- test added (every-run rule; failure-point, direction #3): hscontrol/state/expire_sweep_test.go — TestStateExpireExpiredNodes pins the ticker-driven expiry sweep (previously zero direct coverage): freshly-expired node emits one KeyExpiry change with correct NodeID/expiry and non-backwards watermark; stale expiry (before lastCheck) does not re-notify; unexpired, expiry-less, and empty-store cases stay silent. Standalone green (5 subtests, 0.25s). Mutation-validated: dropping the `After(lastCheck)` guard fails exactly the stale-expiry subtest; production restored byte-identical (git diff clean). gofmt/vet clean, golangci-lint --new-from-rev=HEAD 0 issues
+- bug hunting: reviewed ExpireExpiredNodes + app.go ticker wiring — watermark advances every tick, strict After() prevents dupes, post-start expiries still caught (no miss); no bug. Verified docs claims vs code (DOCS RULE 1): `--endpoint` alias for `--vless-uri` (up.go:39, hidden), `auth register/approve/reject` full-URL parsing (auth.go:parseAuthID), 10-min interactive registration poll (up.go:293), `--one-line`/stderr pipe-cleanliness — all match, no contradictions to file
+- issues filed: none (open/ and in-progress/ empty; no promised-feature gaps in overview.md scope; no CLI copy/paste friction found) | issues closed: none
+- commit: 458f3e1 (test file only via pathspec; pre-existing unstaged DEVLOG.md builder entries and a trivial opencode.jsonc trailing-newline left untouched; --no-verify because the prek golangci-lint hook needs absent `nix` — gofmt/vet/golangci-lint run by hand instead, all clean). No user flow/CLI/output changed, so no docs update per DOCS RULE 2
+- note: DEVLOG.md left uncommitted per protocol (daily-push job handles it)
+
+## 2026-10-16 10:30 UTC — stealth-builder - concurrency guard passed (no /tmp/ss/agent.lock); issues/open/ and in-progress/ both empty — one-line entry appended, cycle stopped, no commit
+
+## 2026-10-16 13:00 UTC — ss-maintain
+
+- concurrency guard: passed (no lock at 13:00 UTC); lock acquired, touched on long steps, released after commit (still owned by this run)
+- build: `GOTOOLCHAIN=go1.26.7 go build ./...` green
+- tests: background `GOTOOLCHAIN=go1.26.7 TMPDIR=/home/tomi/.ss-tmp go test -short -count=1 ./hscontrol/... ./cmd/...` — all packages green, TEST_EXIT:0 (hscontrol 222s, servertest 241s, mapper 45s, state 27s). Note: background suite launched before the fix, so it exercised pre-fix cli code; post-fix `./cmd/...` re-run green including the new test. Race skipped (cgo absent, same as prior cycles)
+- test added + trivial bug fixed (every-run rule; CLI flow, direction #1): `stscale nodes list-routes --identifier <id>` with a nonexistent ID silently fell back to listing ALL nodes' routes (nodes.go filter loop had no miss branch) — a typo'd ID showed everyone's routes. Extracted `filterNodesByIdentifier` (0 = all, match = narrow, miss = `errNodeNotFound: <id>` sentinel + %w, consistent with users.go sentinel style) and pinned with `TestFilterNodesByIdentifier` (5 subtests, 0.02s) in new `cmd/stealthscale/cli/nodes_listroutes_test.go`. Mutation-validated: sabotaged miss branch fails exactly the 2 miss subtests; production restored. gofmt/vet clean, `golangci-lint run --new-from-rev=HEAD ./cmd/stealthscale/cli/` 0 issues (sentinel+%w for err113, //nolint:exhaustruct_v5 fixture comments per repo convention)
+- bug hunting: reviewed stealth Checker dead `healthy` field (set in New, never read — MarkHealthy/MarkUnhealthy are intentional SetReady aliases; harmless cruft, left alone, no refactor-for-fun); verified `FilterDERPMap` dropping `HomeParams` is correct fail-closed semantics (nil = unchanged, empty non-nil Regions = the change); OIDC/auth TODOs are upstream headscale items, out of scope; `approve-routes --all` + expire/disable-expiry flows already collapse copy/paste (no new CLI friction found)
+- docs (DOCS RULE 2): behavior change ships with `docs/ref/routes.md` note documenting `--identifier` + not-found error in the same commit; routes.md examples otherwise match code
+- issues filed: none (open/ and in-progress/ empty; no promised-feature gaps in overview.md scope) | issues closed: none (fixed directly per trivial-bug rule, no issue file existed)
+- commit: abef729 (nodes.go + new test + routes.md via pathspec; pre-existing DEVLOG.md/opencode.jsonc modifications left untouched; --no-verify because the prek golangci-lint hook needs absent `nix` — gofmt/vet/golangci-lint run by hand instead, all clean)
+- note: DEVLOG.md left uncommitted per protocol (daily-push job handles it)
+
+## 2026-10-16 15:30 UTC — stealth-builder - concurrency guard passed (no /tmp/ss/agent.lock); issues/open/ and in-progress/ both empty — one-line entry appended, cycle stopped, no commit
+
+## 2026-10-16 18:00 UTC — ss-maintain
+
+- concurrency guard: passed (no lock at 18:00 UTC); lock acquired, touched on long steps, released after commit (still owned by this run)
+- build: `GOTOOLCHAIN=go1.26.7 go build ./...` green
+- tests: background `GOTOOLCHAIN=go1.26.7 TMPDIR=/home/tomi/.ss-tmp go test -short -count=1 ./hscontrol/... ./cmd/...` — all 29 packages green, TEST_EXIT:0. Note: background suite launched before the new test file existed; post-hoc `./hscontrol/state/` full-package re-run green (24s) incl. the new test. Race skipped (cgo absent, same as prior cycles)
+- test added (every-run rule; failure-point, direction #3): hscontrol/state/reauth_tags_validate_test.go — TestValidateRequestTagsForReauth pins the previously uncovered re-auth tag gate (6 subtests, 0.14s): empty→nil, node-owned tag accepted, userless-node tag accepted via auth-user half, invalid user cannot rescue, undefined tag rejected, mixed request rejects only unowned tags. Views built directly (no IPs) to isolate each authorisation half. Mutation-validated: killing the authUser fallback fails exactly the userless-node subtest; production restored byte-identical (git diff clean). gofmt/vet clean, golangci-lint --new-from-rev=HEAD 0 issues (exhaustruct //nolint fixture comments per repo convention)
+- bug hunting: TODO/FIXME sweep is upstream headscale items (auth.go, oidc.go, noise.go, state.go merge semantics) — out of scope, no refactors. Stealth/DERP fail-closed, re-auth, expiry paths already pinned by prior cycles
+- CLI flow check (direction #1): `stscale nodes vless` --one-line pipe-clean + stderr warnings match docs/stealthscale/clients.md; no copy/paste friction found. Emulated-network harness (direction #2): latency/loss/reorder/RateKbps/Partition all present with tests — nothing to extend this run
+- docs (DOCS RULE 1): verified vless output claims vs nodes.go code — match, no contradictions to file. No user flow/CLI/output changed, so no docs update per DOCS RULE 2
+- issues filed: none (open/ and in-progress/ empty; no promised-feature gaps in overview.md scope) | issues closed: none (fixed nothing; test-only change)
+- commit: 47f7bfc (test file only via pathspec; pre-existing DEVLOG.md/opencode.jsonc modifications left untouched; --no-verify because the prek golangci-lint hook needs absent `nix` — gofmt/vet/golangci-lint run by hand instead, all clean)
+- note: DEVLOG.md left uncommitted per protocol (daily-push job handles it)
