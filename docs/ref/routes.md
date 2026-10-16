@@ -48,6 +48,9 @@ ID | Hostname | Approved | Available      | Serving (Primary)
    |          |          | 192.168.0.0/24 |
 ```
 
+Pass `--identifier <id>` (short `-i`) to show a single node's routes; an
+unknown ID is an error rather than silently falling back to the full list.
+
 Approve all desired routes of a subnet router by specifying them as comma separated list:
 
 ```console

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -20,6 +21,8 @@ import (
 	"github.com/tomiwebpro/stealthscale/hscontrol/xray"
 	"tailscale.com/types/key"
 )
+
+var errNodeNotFound = errors.New("node not found")
 
 func init() {
 	rootCmd.AddCommand(nodeCmd)
@@ -162,6 +165,27 @@ func setFromSlice(ss []string) map[string]struct{} {
 	return m
 }
 
+// filterNodesByIdentifier narrows a node list to the requested identifier.
+// An identifier of 0 returns the full list. A nonzero identifier with no
+// match is an error: silently falling back to the full list would show the
+// operator every node's routes when they asked for exactly one node (e.g.
+// a typo in --identifier), which is worse than no output at all.
+func filterNodesByIdentifier(nodes []clientv1.Node, identifier uint64) ([]clientv1.Node, error) {
+	if identifier == 0 {
+		return nodes, nil
+	}
+
+	idStr := strconv.FormatUint(identifier, util.Base10)
+
+	for _, node := range nodes {
+		if node.Id == idStr {
+			return []clientv1.Node{node}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("%w: %d", errNodeNotFound, identifier)
+}
+
 var listNodeRoutesCmd = &cobra.Command{
 	Use:     "list-routes",
 	Short:   "List routes available on nodes",
@@ -180,15 +204,9 @@ var listNodeRoutesCmd = &cobra.Command{
 
 		nodes := resp.JSON200.Nodes
 
-		if identifier != 0 {
-			idStr := strconv.FormatUint(identifier, util.Base10)
-			for _, node := range nodes {
-				if node.Id == idStr {
-					nodes = []clientv1.Node{node}
-
-					break
-				}
-			}
+		nodes, err = filterNodesByIdentifier(nodes, identifier)
+		if err != nil {
+			return err
 		}
 
 		nodes = lo.Filter(nodes, func(n clientv1.Node, _ int) bool {
