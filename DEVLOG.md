@@ -1666,3 +1666,9 @@ Format:
 - issues filed: none (bug fixed inline, never filed; open/ and in-progress/ were empty at cycle start) | issues closed: none
 - commit: `ae7102d` (cli: target user rename at the resolved user's id, not the unset --identifier flag; users.go fix + users_test.go test/harness + CHANGELOG.md bullet, staged via pathspec; --no-verify because the prek golangci-lint hook shells out to nix, absent in this env — equivalent checks run by hand, all clean). NOTHING pushed per protocol
 - note: DEVLOG.md left uncommitted per protocol step 8/9 (daily-push job handles it)
+
+## 2026-10-20 20:00 UTC — ss-daily-push
+
+- push: failed — `remote: Permission to TomiWebPro/stealthscale.git denied to TomiWebPro` (403) after 3 attempts (initial + 2 retries at 60s intervals)
+- local commit: 63b9baa (chore: daily sync 2026-10-20 — DEVLOG.md ss-maintain entries)
+- final HEAD: 63b9baa
