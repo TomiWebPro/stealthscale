@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -18,13 +19,22 @@ import (
 // endpoint resolveSingleUser talks to — and records
 // the query parameters of every request, so tests can
 // assert both the resolution result and exactly what
-// the CLI asked the server for.
+// the CLI asked the server for. The rename endpoint
+// (POST /api/v1/user/{oldId}/rename/{newName}) is
+// served with the coordinator's resolution semantics:
+// oldId is matched against the fixture users and an
+// unknown id gets the problem response a real server
+// derives from GetUserByID's not-found, so tests can
+// pin exactly which user id the CLI sends downstream
+// of resolution.
 type usersHarness struct {
 	*httptest.Server
 
 	users []clientv1.User
 
 	queries []url.Values
+
+	renames []string
 }
 
 func newUsersHarness(t *testing.T, users ...clientv1.User) *usersHarness {
@@ -35,6 +45,44 @@ func newUsersHarness(t *testing.T, users ...clientv1.User) *usersHarness {
 	h := &usersHarness{users: users}
 	h.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/user/") {
+			// Shape: /api/v1/user/{oldId}/rename/{newName}
+			parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/user/"), "/")
+
+			if len(parts) == 3 && parts[1] == "rename" {
+				h.renames = append(h.renames, parts[0])
+
+				for _, user := range h.users {
+					if user.Id == parts[0] {
+						writeJSON(w, http.StatusOK, clientv1.UserOutputBody{User: user})
+
+						return
+					}
+				}
+
+				// Unresolved id: the coordinator answers with
+				// the GetUserByID not-found problem.
+				//nolint:exhaustruct_v5 // test fixture: the
+				// problem detail fields are nil by design
+				problemTitle := "Not found"
+				problemStatus := int64(http.StatusNotFound)
+				writeJSON(w, http.StatusNotFound, clientv1.ErrorModel{
+					Detail:   nil,
+					Errors:   nil,
+					Instance: nil,
+					Type:     nil,
+					Status:   &problemStatus,
+					Title:    &problemTitle,
+				})
+
+				return
+			}
+
+			http.Error(w, "not found", http.StatusNotFound)
+
+			return
+		}
 
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/user" {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -178,4 +226,33 @@ func TestResolveSingleUserRequiresFlags(t *testing.T) {
 	assert.Nil(t, user)
 	require.ErrorIs(t, err, errFlagRequired)
 	assert.Empty(t, h.queries, "no request must be sent without a filter")
+}
+
+// TestUserRenameUsesResolvedUserID is the failure
+// mode this pins end to end: `users rename --name
+// alice` must rename the user the resolution matched
+// (the server-issued Id), not the raw --identifier
+// flag, which is 0 whenever the operator resolved by
+// name. The coordinator's rename endpoint resolves
+// POST /api/v1/user/{oldId}/rename/{newName} through
+// GetUserByID, so sending the unset flag id as oldId
+// made every by-name rename fail "not found" even
+// though the same query had just successfully
+// resolved the user.
+func TestUserRenameUsesResolvedUserID(t *testing.T) {
+	h := newUsersHarness(t,
+		//nolint:exhaustruct_v5 // test fixture: only Id and Name matter
+		clientv1.User{Id: "42", Name: "alice"},
+	)
+
+	setViperCLIConfig(t, h.URL)
+
+	rootCmd.SetArgs([]string{"users", "rename", "--name", "alice", "--new-name", "bob"})
+
+	require.NoError(t, rootCmd.Execute())
+
+	assert.Equal(t, []string{"42"}, h.renames,
+		"the rename must target the resolved user's server ID, not the unset --identifier flag")
+	require.Len(t, h.queries, 1, "the rename must resolve the user first")
+	assert.Equal(t, "alice", h.queries[0].Get("name"))
 }
