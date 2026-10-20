@@ -112,15 +112,27 @@ var createPreAuthKeyCmd = &cobra.Command{
 			return err
 		}
 
-		userStr := strconv.FormatUint(user, util.Base10)
-
-		request := clientv1.CreatePreAuthKeyJSONRequestBody{
-			User:       &userStr,
-			Reusable:   &reusable,
-			Ephemeral:  &ephemeral,
-			AclTags:    &tags,
-			Expiration: &expiryTime,
+		// Every pre-auth key is owned by a user XOR by tags (never both
+		// needed to be owned by nothing). Fail locally instead of making
+		// the server reject user "0" with an awkward remote error.
+		if user == 0 && len(tags) == 0 {
+			return fmt.Errorf(
+				"%w: preauthkey requires --user or --tags",
+				errMissingParameter,
+			)
 		}
+
+		var request clientv1.CreatePreAuthKeyJSONRequestBody
+
+		if user > 0 {
+			userStr := strconv.FormatUint(user, util.Base10)
+			request.User = &userStr
+		}
+
+		request.Reusable = &reusable
+		request.Ephemeral = &ephemeral
+		request.AclTags = &tags
+		request.Expiration = &expiryTime
 
 		resp, err := client.CreatePreAuthKeyWithResponse(ctx, request)
 		if err != nil {
