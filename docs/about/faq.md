@@ -34,7 +34,7 @@ stscale nodes vless <node-id>
 
 ## Why is DERP empty / why do clients have no relay?
 
-StealthScale **gates DERP on stealth** (`xray.stealth.enforce:true`, default). When `stealth.Checker.IsSatisfied()` is false (Reality not serving), `FilterDERPMap()` returns an empty `DERPMap` (fail-closed) so clients cannot leak traffic through fingerprintable relays. When stealth is satisfied, the full DERP map is served. Verify with `curl http://127.0.0.1:8080/web/api/derp | jq .stealth_satisfied` or `go test ./hscontrol/stealth -v`. See [XRay/VLESS reference](../ref/xray-vless.md).
+StealthScale **gates DERP on stealth** (`xray.stealth.enforce:true`, default). When `stealth.Checker.IsSatisfied()` is false (Reality not serving), `FilterDERPMap()` returns an empty `DERPMap` (fail-closed) so clients cannot leak traffic through fingerprintable relays. When stealth is satisfied, the full DERP map is served. Verify with `curl http://127.0.0.1:9090/metrics | grep stealth_ready` (unauthenticated gauge) or `go test ./hscontrol/stealth -v`; to read `stealth_satisfied` off `/web/api/derp`, send an API-key header (`stscale apikeys create`, then `curl -H "Authorization: Bearer <api-key> …"`) — hardened defaults 401 every `/web/api/*` request without it. See [XRay/VLESS reference](../ref/xray-vless.md).
 
 ## Which database should I use?
 

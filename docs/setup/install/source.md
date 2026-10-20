@@ -56,5 +56,8 @@ Copy to `/usr/local/sbin` and follow the systemd/service notes in [StealthScale 
 go test ./hscontrol/xray -run TestReality -v
 go test ./hscontrol/stealth -v
 stscale nodes vless 1  # stable URI
-curl http://127.0.0.1:8080/web/api/derp | jq .stealth_satisfied
+curl http://127.0.0.1:9090/metrics | grep stealth_ready  # unauthenticated gauge (stealthscale_stealth_ready)
+# /web/api/derp needs an API-key header under the shipped hardened defaults:
+stscale apikeys create
+curl -s -H "Authorization: Bearer <api-key>" http://127.0.0.1:8080/web/api/derp | jq .stealth_satisfied
 ```

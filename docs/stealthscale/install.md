@@ -177,7 +177,7 @@ stscale up --coordinator https://ctl.example.com --authkey <preauthkey> --vless-
 
 Legacy: patched `tailscale up` (reference only) — requires `xray.stealth.enforce_control:false` for stock client compat and `hscontrol/xray.DialVLESS` patch. See `docs/client-modification.md` and `docs/stealthscale/clients.md` for `client/patch/direct.go.diff` reference.
 
-Discovery vs stealth: plain `GET /key` is non-stealth discovery (allowed); registration (`VLESS+Noise`) must be stealth. DERP fail-closed gated on `stealth_satisfied` — check `curl /web/api/derp`.
+Discovery vs stealth: plain `GET /key` is non-stealth discovery (allowed); registration (`VLESS+Noise`) must be stealth. DERP fail-closed gated on `stealth_satisfied` — check `curl http://127.0.0.1:9090/metrics | grep stealth_ready` (public, no auth). `/web/api/derp` requires an API-key header under the shipped hardened defaults; see [Verify Stealth](#verify-stealth).
 
 !!! note "A stealth-capable client is required for the data plane"
 
@@ -231,8 +231,16 @@ stscale nodes vless 1  # should be identical to before restart
 ```bash
 go test ./hscontrol/xray -run TestReality -v
 go test ./hscontrol/stealth -v
-curl -s http://127.0.0.1:8080/web/api/derp | jq .stealth_satisfied
-curl -s http://127.0.0.1:8080/web/api/health | jq
+# Check the stealth gate without any auth (metrics listener, default 127.0.0.1:9090):
+curl -s http://127.0.0.1:9090/metrics | grep stealth_ready
+# => stealthscale_stealth_ready 1 (0 means the transport is not ready — fail-closed gate active)
+
+# /web/api/* endpoints (incl. /web/api/health) require an API key under the shipped
+# hardened defaults (xray.stealth.enforce + enforce_control); a bare curl answers 401 —
+# that is hardening, not a broken install. Create a key (raw key printed once):
+stscale apikeys create
+curl -s -H "Authorization: Bearer <api-key>" http://127.0.0.1:8080/web/api/derp | jq .stealth_satisfied
+curl -s -H "Authorization: Bearer <api-key>" http://127.0.0.1:8080/web/api/health | jq
 ```
 
 If `stealth_satisfied:false`, DERP regions will be empty (fail-closed), proving gating.

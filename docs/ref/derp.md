@@ -2,7 +2,7 @@
 
 !!! warning "Stealth-gated DERP — fail-closed when Reality not satisfied"
 
-    StealthScale gates DERP on `xray.stealth.enforce:true` (default). When `hscontrol/stealth/stealth.go` `Checker.IsSatisfied()==false` (VLESS+Reality not serving or not ready), `FilterDERPMap()` returns **empty** `Regions: map[int]*DERPRegion{}` and `hscontrol/app.go` serves an empty DERP map to clients — **no relay, no STUN leak** (fail-closed). This is intentional: DERP relays are fingerprintable. Only when stealth is satisfied is the full DERP map served. Verify with `curl -s http://127.0.0.1:8080/web/api/derp | jq .stealth_satisfied` or `go test ./hscontrol/stealth -v` and check `/web` DERP tab badge. See [XRay/VLESS reference](./xray-vless.md) and [Threat model](./threat-model.md). Holepunching via STUN/DERP is exempt and only offered when stealth satisfied.
+    StealthScale gates DERP on `xray.stealth.enforce:true` (default). When `hscontrol/stealth/stealth.go` `Checker.IsSatisfied()==false` (VLESS+Reality not serving or not ready), `FilterDERPMap()` returns **empty** `Regions: map[int]*DERPRegion{}` and `hscontrol/app.go` serves an empty DERP map to clients — **no relay, no STUN leak** (fail-closed). This is intentional: DERP relays are fingerprintable. Only when stealth is satisfied is the full DERP map served. Verify with `curl -s http://127.0.0.1:9090/metrics | grep stealth_ready` (unauthenticated gauge: `stealthscale_stealth_ready 1` = transport ready) or `go test ./hscontrol/stealth -v`; to read `.stealth_satisfied` off `/web/api/derp`, send an API-key header (`stscale apikeys create`, then `curl -s -H "Authorization: Bearer <api-key>" http://127.0.0.1:8080/web/api/derp | jq .stealth_satisfied`) — the shipped hardened defaults answer `401` without it (fail-closed includes the admin API). Also check the `/web` DERP tab badge (same API-key login). See [XRay/VLESS reference](./xray-vless.md) and [Threat model](./threat-model.md). Holepunching via STUN/DERP is exempt and only offered when stealth satisfied.
 
 A [DERP (Designated Encrypted Relay for Packets) server](https://tailscale.com/docs/reference/derp-servers) is mainly
 used to relay traffic between two nodes in case a direct connection can't be established. StealthScale provides an embedded
@@ -131,7 +131,7 @@ to the custom DERP map](#enable-embedded-derp).
 
 ### Verify clients (and stealth gating)
 
-Access to DERP is restricted to tailnet members, and further **gated by stealth** (empty map when not satisfied). Check `.stealth_satisfied` in `/web/api/derp` and the `stealthscale_stealth_ready` gauge at `http://127.0.0.1:9090/metrics`.
+Access to DERP is restricted to tailnet members, and further **gated by stealth** (empty map when not satisfied). Check the unauthenticated `stealthscale_stealth_ready` gauge at `http://127.0.0.1:9090/metrics` (`curl http://127.0.0.1:9090/metrics | grep stealth_ready`); `.stealth_satisfied` in `/web/api/derp` additionally needs the `Authorization: Bearer <api-key>` header under the shipped hardened defaults.
 
 === "Embedded DERP"
 
