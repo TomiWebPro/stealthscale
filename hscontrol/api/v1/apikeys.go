@@ -85,14 +85,17 @@ func registerApiKeys(api huma.API, b Backend) {
 		Tags:        []string{"ApiKeys"},
 		Security:    bearerAuth,
 	}, func(ctx context.Context, in *createApiKeyInput) (*createApiKeyOutput, error) {
-		// CreateAPIKey requires a non-nil pointer; default a missing expiration
-		// to the zero time as the gRPC handler does.
-		var expiration time.Time
-		if in.Body.Expiration != nil {
-			expiration = *in.Body.Expiration
+		// An omitted (or explicitly zero) expiration must mint a
+		// never-expiring key: CreateAPIKey validates whatever pointer it gets,
+		// and a non-nil zero time fails the Before(now) expiry check — a key
+		// created already-dead. The Web UI handleCreateAPIKey maps empty expiry
+		// to nil; this path must match it.
+		expiration := in.Body.Expiration
+		if expiration != nil && expiration.IsZero() {
+			expiration = nil
 		}
 
-		keyStr, _, err := b.State.CreateAPIKey(&expiration)
+		keyStr, _, err := b.State.CreateAPIKey(expiration)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("creating api key", err)
 		}
