@@ -59,6 +59,16 @@ func signTestIDToken(t *testing.T, key *rsa.PrivateKey, claims map[string]any) s
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
+// idpUserinfo configures the fake IdP's userinfo endpoint.
+type idpUserinfo struct {
+	// sub is the subject the userinfo response claims.
+	sub    string
+	groups []string
+	// status is the HTTP status the endpoint replies with;
+	// 0 means 200. A non-200 simulates an IdP userinfo outage.
+	status int
+}
+
 // sshCheckIdPConfig carries the fake IdP's failure-injection
 // knobs; the zero value serves the happy path.
 type sshCheckIdPConfig struct {
@@ -66,6 +76,11 @@ type sshCheckIdPConfig struct {
 	// instead of minting a token: an IdP outage during the
 	// authorization-code exchange.
 	failTokenEndpoint bool
+	// userinfo, when set, serves a userinfo endpoint and
+	// advertises it in discovery; nil keeps the endpoint
+	// unserved (the callback must tolerate that missing
+	// endpoint on the ID-token claims alone).
+	userinfo *idpUserinfo
 }
 
 // sshCheckIdPOption customizes the fake IdP served by
@@ -82,13 +97,32 @@ func failTokenEndpoint() sshCheckIdPOption {
 	}
 }
 
+// serveUserinfo makes the fake IdP serve a userinfo endpoint
+// claiming the given subject and groups. It drives the
+// callback's claims-merge branch: userinfo claims for the
+// same subject extend the verified ID-token claims.
+func serveUserinfo(sub string, groups []string) sshCheckIdPOption {
+	return func(cfg *sshCheckIdPConfig) {
+		cfg.userinfo = &idpUserinfo{sub: sub, groups: groups} //nolint:exhaustruct_v5 // partial literal: only sub/groups under test
+	}
+}
+
+// failUserinfo makes the fake IdP's userinfo endpoint reply 500
+// (a mid-auth IdP hiccup) while discovery and JWKS keep working.
+func failUserinfo() sshCheckIdPOption {
+	return func(cfg *sshCheckIdPConfig) {
+		cfg.userinfo = &idpUserinfo{sub: sshCheckIDTokenSub, status: http.StatusInternalServerError} //nolint:exhaustruct_v5 // partial literal: only sub/status under test
+	}
+}
+
 // newSSHCheckCallbackIdP starts a fake OpenID Connect provider
 // whose token endpoint mints one fixed RS256 ID token (subject
 // sshCheckIDTokenSub, nonce sshCheckIDTokenNonce). Discovery
 // and JWKS are served so a real *oidc.Provider can be built
-// against it. The userinfo endpoint is deliberately not served:
-// the callback must tolerate a failing userinfo fetch (an OIDC
-// hiccup) and proceed on the ID-token claims alone. The second
+// against it. Unless a userinfo option is set, the userinfo
+// endpoint is deliberately not served: the callback must
+// tolerate a failing userinfo fetch (an OIDC hiccup) and
+// proceed on the ID-token claims alone. The second
 // return value counts token-endpoint calls, so tests can assert
 // the callback fails closed BEFORE exchanging an authorization
 // code whose CSRF state did not verify.
@@ -113,12 +147,19 @@ func newSSHCheckCallbackIdP(t *testing.T, opts ...sshCheckIdPOption) (string, *a
 
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+
+		discovery := map[string]any{
 			"issuer":                 srv.URL,
 			"authorization_endpoint": srv.URL + "/auth",
 			"token_endpoint":         srv.URL + "/token",
 			"jwks_uri":               srv.URL + "/jwks",
-		})
+		}
+		if cfg.userinfo != nil {
+			//nolint:exhaustruct_v5 // partial literal: discovery doc, one key at a time
+			discovery["userinfo_endpoint"] = srv.URL + "/userinfo"
+		}
+
+		_ = json.NewEncoder(w).Encode(discovery)
 	})
 
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
@@ -134,6 +175,32 @@ func newSSHCheckCallbackIdP(t *testing.T, opts ...sshCheckIdPOption) (string, *a
 			}},
 		})
 	})
+
+	if cfg.userinfo != nil {
+		ui := cfg.userinfo
+
+		mux.HandleFunc("/userinfo", func(w http.ResponseWriter, r *http.Request) {
+			status := ui.status
+			if status == 0 {
+				status = http.StatusOK
+			}
+
+			if status != http.StatusOK {
+				http.Error(w, "idp userinfo unavailable", status)
+
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+
+			claims := map[string]any{"sub": ui.sub}
+			if ui.groups != nil {
+				claims["groups"] = ui.groups
+			}
+
+			_ = json.NewEncoder(w).Encode(claims)
+		})
+	}
 
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		tokenCalls.Add(1)
@@ -561,4 +628,118 @@ func TestOIDCCallbackIdPHiccupFailsClosed(t *testing.T) {
 		"a failed token exchange must not deliver any SSH check verdict")
 	assert.Positive(t, tokenCalls.Load(),
 		"the callback must have attempted the exchange (the oauth2 library may probe the token endpoint twice, retrying the credentials in the other auth style, before giving up)")
+}
+
+// TestOIDCCallbackUserinfoClaims pins the userinfo-claims merge
+// at the end of the happy path: the verified ID token is the
+// identity, and the IdP's userinfo response (which OAuth2
+// delivers with a bearer token, unauthenticated to us) may only
+// extend it when it claims the SAME subject:
+//
+//   - a userinfo outage (500) mid-callback is tolerated — an
+//     OIDC hiccup — and the callback proceeds on the ID-token
+//     claims alone (the harness's unserved-userinfo default is
+//     an explicit 500 here, so the documented fallback is
+//     pinned, not incidentally hit);
+//   - userinfo claims whose subject matches the ID token are
+//     merged (groups the ID token omits arrive via userinfo, so
+//     allowed-groups passes) — without the merge this subtest
+//     is refused;
+//   - userinfo claims for a DIFFERENT subject are dropped: a
+//     misbehaving or confused IdP userinfo must not override
+//     what the signed ID token says about who authenticated.
+//     Without the subject guard the groups below would merge
+//     from an unverified identity and the subtest would approve.
+//
+// Every branch observes the verdict the callback delivers to a
+// parked SSH check, so a wrongly-merged identity fails loudly.
+func TestOIDCCallbackUserinfoClaims(t *testing.T) {
+	t.Parallel()
+
+	const allowedGroup = "admins"
+
+	tests := []struct {
+		name        string
+		idpOpts     []sshCheckIdPOption
+		allowedGrps []string
+		wantCode    int
+		wantVerdict bool
+	}{
+		{
+			// A nil allowed-group gate: the ID-token claims alone
+			// authorize this case, without the (failing) userinfo.
+			name:        "userinfo outage proceeds on id-token claims",
+			idpOpts:     []sshCheckIdPOption{failUserinfo()},
+			allowedGrps: nil,
+			wantCode:    http.StatusOK,
+			wantVerdict: true,
+		},
+		{
+			name: "matching-sub userinfo supplies the allowed group",
+			// The ID token has no groups; only the merged
+			// userinfo claims can satisfy allowed-groups. No
+			// merge → 401 + parked verdict.
+			idpOpts:     []sshCheckIdPOption{serveUserinfo(sshCheckIDTokenSub, []string{allowedGroup})},
+			allowedGrps: []string{allowedGroup},
+			wantCode:    http.StatusOK,
+			wantVerdict: true,
+		},
+		{
+			name: "mismatched-sub userinfo groups are dropped",
+			// The userinfo response claims a different subject
+			// than the signed ID token: its groups must not be
+			// merged, so allowed-groups fails closed on the
+			// ID-token identity. Without the subject guard the
+			// merge would approve an unverified identity.
+			idpOpts:     []sshCheckIdPOption{serveUserinfo("userinfo-sub-differs", []string{allowedGroup})},
+			allowedGrps: []string{allowedGroup},
+			wantCode:    http.StatusUnauthorized,
+			wantVerdict: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			issuer, _ := newSSHCheckCallbackIdP(t, tc.idpOpts...)
+
+			app := createTestApp(t)
+			provider := newSSHCheckOIDCProvider(t, app, issuer)
+			provider.cfg.AllowedGroups = tc.allowedGrps
+
+			authID := types.MustAuthID()
+			provider.authCache.Add(sshCheckOIDCState, AuthInfo{AuthID: authID}) //nolint:exhaustruct_v5 // partial literal: only AuthID is set
+
+			user := sshCheckOIDCUser(t, app, issuer)
+
+			src := app.state.CreateNodeForTest(user, "userinfo-src")
+			dst := app.state.CreateNodeForTest(user, "userinfo-dst")
+			app.state.PutNodeInStoreForTest(*src)
+			app.state.PutNodeInStoreForTest(*dst)
+
+			authReq := types.NewSSHCheckAuthRequest(src.ID, dst.ID)
+			app.state.SetAuthCacheEntry(authID, authReq)
+
+			rec := httptest.NewRecorder()
+			provider.OIDCCallbackHandler(rec, sshCheckCallbackRequest())
+
+			assert.Equal(t, tc.wantCode, rec.Code)
+
+			if tc.wantVerdict {
+				select {
+				case verdict := <-authReq.WaitForAuth():
+					assert.True(t, verdict.Accept(),
+						"the tolerated userinfo path must deliver an accepting verdict")
+				default:
+					t.Fatal("the tolerated userinfo path must deliver a verdict")
+				}
+
+				return
+			}
+
+			assert.Empty(t, authReq.WaitForAuth(),
+				"a discarded userinfo identity must not deliver any verdict")
+		})
+	}
 }
