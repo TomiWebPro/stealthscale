@@ -102,10 +102,14 @@ func registerPreAuthKeys(api huma.API, b Backend) {
 			}
 		}
 
-		// CreatePreAuthKey requires a non-nil pointer; zero-stamp when unset.
-		var expiration time.Time
-		if in.Body.Expiration != nil {
-			expiration = *in.Body.Expiration
+		// An omitted (or explicitly zero) expiration must mint a
+		// never-expiring key: a non-nil zero time fails the
+		// PreAuthKey.Validate Before(now) expiry check — a key created
+		// already-dead. The Web UI handleCreatePreAuthKey maps empty
+		// expiry to nil; this path must match it.
+		expiration := in.Body.Expiration
+		if expiration != nil && expiration.IsZero() {
+			expiration = nil
 		}
 
 		var userID *types.UserID
@@ -123,7 +127,7 @@ func registerPreAuthKeys(api huma.API, b Backend) {
 			userID,
 			in.Body.Reusable,
 			in.Body.Ephemeral,
-			&expiration,
+			expiration,
 			in.Body.ACLTags,
 		)
 		if err != nil {

@@ -20,8 +20,9 @@ import (
 // serves it locally-trusted, mirroring the unix-socket trust boundary. This is
 // the fastest harness that exercises the full request path — routing, body
 // coercion, middleware shape and the handler/state/DB stack together —
-// without Docker.
-func newPreAuthKeyTestServer(t *testing.T) *httptest.Server {
+// without Docker. The State is returned so tests can assert on the persisted
+// record (e.g. pre-auth key expiry semantics) behind a response.
+func newPreAuthKeyTestServer(t *testing.T) (*httptest.Server, *state.State) {
 	t.Helper()
 
 	prefixV4 := netip.MustParsePrefix("100.64.0.0/10")
@@ -56,7 +57,7 @@ func newPreAuthKeyTestServer(t *testing.T) *httptest.Server {
 	srv := httptest.NewServer(WithLocalTrust(mux))
 	t.Cleanup(srv.Close)
 
-	return srv
+	return srv, st
 }
 
 // requestJSON issues the HTTP call for the given method and decodes the
@@ -127,7 +128,7 @@ func problemStatus(t *testing.T, body map[string]any) int {
 // (never a raw 500), and repeated revocation of an id the admin CLI got from
 // stale list output is a clean 404.
 func TestPreAuthKeyHandlers(t *testing.T) {
-	srv := newPreAuthKeyTestServer(t)
+	srv, _ := newPreAuthKeyTestServer(t)
 
 	okCode, okBody := createKey(t, srv, map[string]any{
 		"user":     "0",
@@ -205,4 +206,79 @@ func TestPreAuthKeyHandlers(t *testing.T) {
 		code, body = requestJSON(t, srv, http.MethodDelete, "/api/v1/preauthkey?id="+id, nil)
 		require.Equal(t, http.StatusNotFound, code, "body: %v", body)
 	})
+}
+
+// TestPreAuthKeyOmittedOrZeroExpirationMintsUsableKey pins the auth-expiry
+// failure mode at key *creation*: an omitted (or explicitly zero) expiration
+// field must mint a never-expiring key, not an already-dead one. The wire is
+// blind to this — a zero-stamped *time.Time serialises the same in list
+// output — so the persisted record is resolved through State and asserted
+// with PreAuthKey.Validate, the exact check the registration path performs
+// when a node tries to use the key.
+func TestPreAuthKeyOmittedOrZeroExpirationMintsUsableKey(t *testing.T) {
+	srv, st := newPreAuthKeyTestServer(t)
+
+	creates := []struct {
+		name string
+		body map[string]any
+	}{
+		{
+			name: "omitted expiration",
+			body: map[string]any{
+				"user":     "0",
+				"reusable": true,
+				"aclTags":  []string{"tag:web"},
+			},
+		},
+		{
+			name: "explicit zero timestamp",
+			body: map[string]any{
+				"user":       "0",
+				"reusable":   true,
+				"expiration": "0001-01-01T00:00:00Z",
+				"aclTags":    []string{"tag:database"},
+			},
+		},
+	}
+
+	for _, tc := range creates {
+		t.Run(tc.name, func(t *testing.T) {
+			code, body := createKey(t, srv, tc.body)
+			require.Equal(t, http.StatusOK, code, "body: %v", body)
+
+			plain, ok := preAuthKeyOf(t, body)["key"].(string)
+			require.Truef(t, ok, "creation must return the plaintext key, got %v", body)
+
+			pak, err := st.GetPreAuthKey(plain)
+			require.NoError(t, err)
+
+			require.Nil(t, pak.Expiration, "stored key must not carry an expiration")
+
+			assertNoError := pak.Validate()
+			require.NoErrorf(
+				t,
+				assertNoError,
+				"a freshly minted key with no expiration must validate as usable, got %v",
+				assertNoError,
+			)
+		})
+	}
+
+	// Contrast case: a key created with a *past* timestamp IS born dead —
+	// Validate must reject it. Guards the above against faded assertions.
+	code, body := createKey(t, srv, map[string]any{
+		"user":       "0",
+		"reusable":   true,
+		"expiration": time.Now().Add(-time.Hour).Format(time.RFC3339),
+		"aclTags":    []string{"tag:gone"},
+	})
+	require.Equal(t, http.StatusOK, code, "body: %v", body)
+
+	plain, ok := preAuthKeyOf(t, body)["key"].(string)
+	require.Truef(t, ok, "creation must return the plaintext key, got %v", body)
+
+	past, err := st.GetPreAuthKey(plain)
+	require.NoError(t, err)
+
+	require.Error(t, past.Validate(), "a key minted with a past expiration must be born expired")
 }
