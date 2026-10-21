@@ -55,6 +55,13 @@ type writeMockState struct {
 	failRename     error
 	failTags       error
 	failRoutes     error
+
+	// Policy write-boundary surface: call order record + failure
+	// injection used to pin the validate → persist → apply ordering.
+	calls              []string
+	failPolicyValidate error
+	failPolicyDB       error
+	failPolicyReload   error
 }
 
 func newWriteMock() *writeMockState {
@@ -762,29 +769,108 @@ func TestWebUI_CreatePreAuthKey(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, resp.StatusCode)
 }
 
+func (m *writeMockState) ValidatePolicy(pol []byte) error {
+	m.calls = []string{"validate"}
+	if m.failPolicyValidate != nil {
+		return m.failPolicyValidate
+	}
+
+	return nil
+}
+
+func (m *writeMockState) SetPolicyInDB(data string) (*types.Policy, error) {
+	m.calls = []string{"validate", "db"}
+	if m.failPolicyDB != nil {
+		return nil, m.failPolicyDB
+	}
+
+	return &types.Policy{}, nil //nolint:exhaustruct_v5 // test fixture: only fields under test
+}
+
+func (m *writeMockState) ReloadPolicy() ([]change.Change, error) {
+	m.calls = []string{"validate", "db", "reload"}
+	if m.failPolicyReload != nil {
+		return nil, m.failPolicyReload
+	}
+
+	return []change.Change{change.PolicyChange()}, nil
+}
+
 func TestWebUI_SetPolicy(t *testing.T) {
 	cfg := testConfig()
+
+	// Non-DB policy mode is rejected up front, like PUT /api/v1/policy.
 	st := &mockState{}
 	h := Handler(cfg, st)
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	// PUT via POST also allowed
 	pol := `{"acls":[]}`
-	body, _ := json.Marshal(map[string]string{"policy": pol})
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/web/api/policy", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
+
+	resp := doJSON(t, http.MethodPut, srv.URL+"/web/api/policy", map[string]string{"policy": pol})
 	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	// Full write boundary in DB mode: validate → persist → apply.
+	policyMock := newWriteMock()
+	policyMock.calls = []string{}
+
+	policyCfg := testConfig()
+	policyCfg.Policy = types.PolicyConfig{
+		Mode: types.PolicyModeDB,
+		Path: "",
+	} //nolint:exhaustruct_v5 // test fixture: only fields under test
+
+	var broadcast []change.Change
+
+	policySink := func(cs ...change.Change) {
+		broadcast = append(broadcast, cs...)
+	}
+
+	policySrv := httptest.NewServer(Handler(policyCfg, policyMock, policySink))
+	defer policySrv.Close()
+
+	resp = doJSON(t, http.MethodPut, policySrv.URL+"/web/api/policy", map[string]string{"policy": pol})
+	defer resp.Body.Close()
+
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, []string{"validate", "db", "reload"}, policyMock.calls,
+		"a setPolicy must run the full validate → persist → apply boundary in order")
+	assert.Len(t, broadcast, 1, "the reload change must be broadcast to connected clients")
+
+	// Rejected validation → 400 and the boundary stops before persist/apply.
+	invalid := newWriteMock()
+	invalid.failPolicyValidate = assert.AnError
+
+	invalidSrv := httptest.NewServer(Handler(policyCfg, invalid, policySink))
+	defer invalidSrv.Close()
+
+	resp = doJSON(t, http.MethodPut, invalidSrv.URL+"/web/api/policy", map[string]string{"policy": pol})
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, []string{"validate"}, invalid.calls,
+		"no persist or live apply may happen after a rejected validation")
+
+	// Failed DB persist → 500 and no live apply.
+	dbFail := newWriteMock()
+	dbFail.failPolicyDB = assert.AnError
+
+	dbFailSrv := httptest.NewServer(Handler(policyCfg, dbFail, policySink))
+	defer dbFailSrv.Close()
+
+	resp = doJSON(t, http.MethodPut, dbFailSrv.URL+"/web/api/policy", map[string]string{"policy": pol})
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.Equal(t, []string{"validate", "db"}, dbFail.calls,
+		"the live manager must not be applied when the persist step fails")
 
 	// empty policy -> 400
-	req, _ = http.NewRequest(http.MethodPut, srv.URL+"/web/api/policy", bytes.NewReader([]byte(`{"policy":""}`)))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err = http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
+	resp = doJSON(t, http.MethodPut, policySrv.URL+"/web/api/policy", map[string]string{"policy": ""})
+	defer resp.Body.Close()
+
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 

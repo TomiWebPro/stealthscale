@@ -1323,6 +1323,46 @@ func (s *State) SetPolicy(pol []byte) (bool, error) {
 	return changed, nil
 }
 
+// ValidatePolicy validates the policy bytes against the current users and
+// nodes without touching the live [policy.PolicyManager]: the draft is
+// compiled into a throwaway manager (the same gate [State.SetPolicy] runs,
+// plus everything [policy.PolicyManager] checks on boot), and when nodes
+// exist, SSH rules must also compile for the first node. SSH rule
+// validation needs a node, so a server with no nodes can't catch every
+// case here.
+//
+// It is the pre-persist step of the admin policy-write boundary: callers
+// validate first, then persist, and only then apply to the live manager
+// ([State.ReloadPolicy]), so a write that returns an error never affects
+// live policy evaluation and the DB never runs ahead of it.
+func (s *State) ValidatePolicy(pol []byte) error {
+	users, err := s.ListAllUsers()
+	if err != nil {
+		return fmt.Errorf("loading users: %w", err)
+	}
+
+	nodes := s.ListNodes()
+
+	pm, err := policy.NewPolicyManager(pol, users, nodes)
+	if err != nil {
+		return err
+	}
+
+	_, err = pm.SetPolicy(pol)
+	if err != nil {
+		return err
+	}
+
+	if nodes.Len() > 0 {
+		_, err = pm.SSHPolicy(s.cfg.ServerURL, nodes.At(0))
+		if err != nil {
+			return fmt.Errorf("verifying SSH rules: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // AutoApproveRoutes checks if a node's routes should be auto-approved.
 // AutoApproveRoutes checks if any routes should be auto-approved for a node and updates them.
 func (s *State) AutoApproveRoutes(nv types.NodeView) (change.Change, error) {

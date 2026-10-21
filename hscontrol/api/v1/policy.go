@@ -118,21 +118,17 @@ func registerPolicy(api huma.API, b Backend) {
 
 		p := in.Body.Policy
 
-		// Reject policy that would fail when building a map response. SSH rule
-		// validation needs a node, so a server with no nodes can't catch every
-		// case here.
-		nodes := b.State.ListNodes()
-
-		_, err := b.State.SetPolicy([]byte(p))
+		// Validate-and-persist before touching the live manager: a write
+		// that returns an error must not affect policy evaluation, and the
+		// DB must never run ahead of the live manager. Validation runs on a
+		// throwaway manager (same sandbox checkPolicy uses, plus per-node
+		// SSH compilation — a server with no nodes can't catch every case
+		// there). The live manager is only updated by the final reload,
+		// which re-derives the policy from what was just persisted, so live
+		// state, DB and the response can never disagree.
+		err := b.State.ValidatePolicy([]byte(p))
 		if err != nil {
 			return nil, huma.Error400BadRequest("setting policy", err)
-		}
-
-		if nodes.Len() > 0 {
-			_, err = b.State.SSHPolicy(nodes.At(0))
-			if err != nil {
-				return nil, huma.Error400BadRequest("verifying SSH rules", err)
-			}
 		}
 
 		updated, err := b.State.SetPolicyInDB(p)

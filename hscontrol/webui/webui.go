@@ -51,10 +51,19 @@ type State interface {
 	// SetPolicy([]byte) (bool, error)
 }
 
+// policySetWriter is the full policy-write boundary surface used by
+// handleSetPolicy (implemented by *state.State): validate on a throwaway
+// manager, persist to the DB, then apply to the live manager via reload.
+//
 // Write-capable state surfaces, delegated via type assertion so this
 // package stays free of a state import (mirrors the optional-write
 // pattern documented on State). All are implemented by *state.State.
 type (
+	policySetWriter interface {
+		ValidatePolicy(pol []byte) error
+		SetPolicyInDB(data string) (*types.Policy, error)
+		ReloadPolicy() ([]change.Change, error)
+	}
 	nodeLifecycleWriter interface {
 		SetNodeExpiry(nodeID types.NodeID, expiry *time.Time) (types.NodeView, change.Change, error)
 		RenameNode(nodeID types.NodeID, newName string) (types.NodeView, change.Change, error)
@@ -336,7 +345,7 @@ func Handler(cfg *types.Config, st State, onChange ...ChangeFunc) http.Handler {
 		case http.MethodGet:
 			handlePolicy(w, r, st)
 		case http.MethodPut, http.MethodPost:
-			handleSetPolicy(w, r, st)
+			handleSetPolicy(w, r, cfg, st, sink)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -1061,29 +1070,74 @@ func handleCreatePreAuthKey(w http.ResponseWriter, r *http.Request, st State) {
 	})
 }
 
-func handleSetPolicy(w http.ResponseWriter, r *http.Request, st State) {
+func handleSetPolicy(w http.ResponseWriter, r *http.Request, cfg *types.Config, st State, onChange ChangeFunc) {
 	var req struct {
 		Policy string `json:"policy"`
 		Data   string `json:"data"`
 	}
 	body, _ := io.ReadAll(r.Body)
 	_ = json.Unmarshal(body, &req)
+
 	pol := req.Policy
 	if pol == "" {
 		pol = req.Data
 	}
+
 	if pol == "" {
 		http.Error(w, "missing policy", http.StatusBadRequest)
 		return
 	}
+
+	// Policy updates are only valid in DB mode; otherwise 400 (same
+	// contract as PUT /api/v1/policy).
+	if cfg != nil && cfg.Policy.Mode != types.PolicyModeDB {
+		http.Error(w, types.ErrPolicyUpdateIsDisabled.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Validate, persist, then apply to the live manager via reload — a
+	// write that returns an error must not have mutated live policy
+	// evaluation, and the DB must never run ahead of the live manager.
+	if pw, ok := any(st).(policySetWriter); ok {
+		err := pw.ValidatePolicy([]byte(pol))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		_, err = pw.SetPolicyInDB(pol)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		cs, err := pw.ReloadPolicy()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		for _, c := range cs {
+			propagateChange(onChange, c)
+		}
+
+		writeJSON(w, map[string]any{"status": "policy updated"})
+
+		return
+	}
+
+	// Legacy stub fallback (test states): the old direct-SetPolicy path,
+	// without the validate/persist order.
 	if ws, ok := any(st).(interface{ SetPolicy([]byte) (bool, error) }); ok {
 		if _, err := ws.SetPolicy([]byte(pol)); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+
 		writeJSON(w, map[string]any{"status": "policy updated"})
 		return
 	}
+
 	writeJSON(w, map[string]any{"status": "policy updated (stub — wire to state.SetPolicy)"})
 }
 

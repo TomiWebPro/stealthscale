@@ -113,19 +113,13 @@ func registerACL(api huma.API, b Backend) {
 			}
 		}
 
-		// Mirror the v1 setPolicy flow: validate, SSH-check, persist, reload.
-		nodes := b.State.ListNodes()
-
-		_, err = b.State.SetPolicy(in.RawBody)
+		// Mirror the v1 setPolicy flow, with the same write-boundary
+		// order: validate on a throwaway manager, persist, then apply to
+		// the live manager via reload (which re-derives from the DB). A
+		// rejected write never affects live policy evaluation.
+		err = b.State.ValidatePolicy(in.RawBody)
 		if err != nil {
 			return nil, huma.Error400BadRequest("setting policy", err)
-		}
-
-		if nodes.Len() > 0 {
-			_, err = b.State.SSHPolicy(nodes.At(0))
-			if err != nil {
-				return nil, huma.Error400BadRequest("verifying SSH rules", err)
-			}
 		}
 
 		updated, err := b.State.SetPolicyInDB(string(in.RawBody))

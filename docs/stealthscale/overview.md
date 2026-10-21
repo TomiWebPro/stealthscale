@@ -190,7 +190,10 @@ done. It reflects the codebase at the time of writing:
   CRUD (list shows masked prefixes; the raw key is returned exactly once),
   auth approve/reject (SSH-check sessions — registration sessions complete
   via the node's auth URL), policy `PUT` plus `POST /policy/check`
-  (validates a draft against live users and nodes), a runtime DERP map
+  (a draft is validated against live users and nodes on a throwaway
+  policy manager, persisted to the DB, and only then applied to the live
+  manager via reload — a write that answers an error never takes effect
+  on the running tailnet), a runtime DERP map
   apply (`POST /derp`, delegating to `state.SetDERPMapRuntime` — the
   relay setup is configurable without editing `derp.yaml` and
   restarting; an operator-applied map takes precedence over the
