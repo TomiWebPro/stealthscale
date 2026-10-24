@@ -1782,3 +1782,11 @@ Format:
 ## 2026-10-24 18:00 UTC — ss-maintain
 
 - concurrency guard: /tmp/ss/agent.lock held by "ss-maintain 2026-10-24T00:00 UTC" (`find -mmin -15` returned path — skipped per protocol; note: file mtime appears ~3h old despite fs reporting recent, flagging for follow-up)
+
+## 2026-10-24 20:05 UTC — ss-daily-push
+
+- committed & pushed: `98c22ca` chore: daily sync 2026-10-24
+  - CLI: reject zero-duration pre-auth key expiry (utils.go); pin regression test (preauthkeys_test.go)
+  - hscontrol/api/v2/devices_routes_validation_test.go — new route validation unit tests
+  - hscontrol/apiv1_preauthkeys_test.go, hscontrol/policy/v2/utils.go, integration/cli_preauthkeys_test.go — exhaustruct fixes from prior agent cycle
+- HEAD at push: `98c22ca`
