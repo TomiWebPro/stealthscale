@@ -48,8 +48,6 @@ func TestExpiryDurationDefaults(t *testing.T) {
 	})
 }
 
-
-
 func TestTimeOrZero(t *testing.T) {
 	t.Parallel()
 

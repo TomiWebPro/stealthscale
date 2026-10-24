@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	clientv1 "github.com/tomiwebpro/stealthscale/gen/client/v1"
@@ -125,4 +126,86 @@ func TestPreAuthKeyCreateTagsOnlyOmitsUser(t *testing.T) {
 	assert.Nil(t, h.bodies[0].User, "a tagged key must not carry a user field")
 	require.NotNil(t, h.bodies[0].AclTags)
 	assert.Equal(t, []string{"tag:server"}, *h.bodies[0].AclTags)
+}
+
+// expirationFlagCmd builds a throwaway cobra command carrying the
+// --expiration flag exactly as the create commands do, so
+// expirationFromFlag can be exercised in isolation.
+func expirationFlagCmd(t *testing.T, value string) *cobra.Command {
+	t.Helper()
+
+	//nolint:exhaustruct_v5 // test fixture: fields are not under test
+	c := &cobra.Command{Use: "expiration-test"}
+	c.Flags().StringP("expiration", "e", "", "under test")
+	require.NoError(t, c.Flags().Set("expiration", value))
+
+	return c
+}
+
+// TestExpirationFromFlagRejectsNonPositiveDuration pins the
+// already-dead-key failure mode of the create commands' shared
+// --expiration parser: prometheus ParseDuration allows "0", which
+// used to produce a key with expiration=time.Now() — expired before
+// any node could ever use it — and the API returns it with exit 0.
+// Both `preauthkeys create` and `apikeys create` route through this
+// helper, so one table covers both surfaces.
+func TestExpirationFromFlagRejectsNonPositiveDuration(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "bare zero", value: "0", wantErr: true},
+		{name: "zero seconds", value: "0s", wantErr: true},
+		{
+			name:    "one hour",
+			value:   "1h",
+			wantErr: false,
+		},
+		{
+			name:    "ninety days",
+			value:   "90d",
+			wantErr: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expiry, err := expirationFromFlag(expirationFlagCmd(t, tc.value))
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "positive duration")
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.True(t, expiry.After(time.Now().Add(-time.Second)),
+				"a usable expiration must be in the future, got %v", expiry)
+		})
+	}
+}
+
+// TestPreAuthKeyCreateRejectsNonPositiveExpirationEndToEnd pins the
+// user-visible behaviour of `stscale preauthkeys create -e 0`: the
+// command must fail locally — before any server roundtrip — instead
+// of minting an already-dead key and answering with exit 0.
+func TestPreAuthKeyCreateRejectsNonPositiveExpirationEndToEnd(t *testing.T) {
+	for _, value := range []string{"0", "0s"} {
+		t.Run(value, func(t *testing.T) {
+			h := newPreauthKeysHarness(t)
+			setViperCLIConfig(t, h.URL)
+
+			rootCmd.SetArgs([]string{
+				"preauthkeys", "create", "--user", "42", "-e", value,
+			})
+
+			err := rootCmd.Execute()
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "positive duration")
+			assert.Empty(
+				t, h.bodies,
+				"no request must hit the server for a dead-on-arrival expiration",
+			)
+		})
+	}
 }

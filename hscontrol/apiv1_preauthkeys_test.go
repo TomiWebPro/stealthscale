@@ -25,7 +25,13 @@ func seedPreAuthKeys() func(t *testing.T, app *StealthScale) {
 		require.NoError(t, err)
 
 		// Tagged, system-created: no user.
-		_, err = app.state.CreatePreAuthKey(nil, false, true, &exp, []string{"tag:test"})
+		_, err = app.state.CreatePreAuthKey(
+			nil,
+			false,
+			true,
+			&exp,
+			[]string{"tag:test"},
+		)
 		require.NoError(t, err)
 	}
 }
@@ -86,19 +92,34 @@ func TestAPIV1CreatePreAuthKey(t *testing.T) {
 
 	t.Run("nonexistent user parity", func(t *testing.T) {
 		h := newAPIV1Harness(t)
-		res := h.assertParity(t, http.MethodPost, "/api/v1/preauthkey", []byte(`{"user":"999"}`))
+		res := h.assertParity(
+			t,
+			http.MethodPost,
+			"/api/v1/preauthkey",
+			[]byte(`{"user":"999"}`),
+		)
 		assertStatus(t, res, http.StatusNotFound)
 	})
 
 	t.Run("invalid user id parity", func(t *testing.T) {
 		h := newAPIV1Harness(t)
-		res := h.assertParity(t, http.MethodPost, "/api/v1/preauthkey", []byte(`{"user":"abc"}`))
+		res := h.assertParity(
+			t,
+			http.MethodPost,
+			"/api/v1/preauthkey",
+			[]byte(`{"user":"abc"}`),
+		)
 		assertStatus(t, res, http.StatusBadRequest)
 	})
 
 	t.Run("neither tagged nor owned parity", func(t *testing.T) {
 		h := newAPIV1Harness(t)
-		res := h.assertParity(t, http.MethodPost, "/api/v1/preauthkey", []byte(`{"reusable":true}`))
+		res := h.assertParity(
+			t,
+			http.MethodPost,
+			"/api/v1/preauthkey",
+			[]byte(`{"reusable":true}`),
+		)
 		assertStatus(t, res, http.StatusBadRequest)
 	})
 }
@@ -117,7 +138,12 @@ func TestAPIV1ExpirePreAuthKey(t *testing.T) {
 
 	t.Run("invalid id parity", func(t *testing.T) {
 		h := newAPIV1Harness(t)
-		res := h.assertParity(t, http.MethodPost, "/api/v1/preauthkey/expire", []byte(`{"id":"abc"}`))
+		res := h.assertParity(
+			t,
+			http.MethodPost,
+			"/api/v1/preauthkey/expire",
+			[]byte(`{"id":"abc"}`),
+		)
 		assertStatus(t, res, http.StatusBadRequest)
 	})
 }

@@ -178,7 +178,10 @@ func TestPreAuthKeyCommandWithoutExpiry(t *testing.T) {
 	require.NoError(t, err)
 	defer scenario.ShutdownAssertNoPanics(t)
 
-	err = scenario.CreateStealthScaleEnv([]tsic.Option{}, hsic.WithTestName("clipaknaexp"))
+	err = scenario.CreateStealthScaleEnv(
+		[]tsic.Option{},
+		hsic.WithTestName("clipaknaexp"),
+	)
 	require.NoError(t, err)
 
 	stealthscale, err := scenario.StealthScale()
@@ -244,7 +247,10 @@ func TestPreAuthKeyCommandReusableEphemeral(t *testing.T) {
 	require.NoError(t, err)
 	defer scenario.ShutdownAssertNoPanics(t)
 
-	err = scenario.CreateStealthScaleEnv([]tsic.Option{}, hsic.WithTestName("clipakresueeph"))
+	err = scenario.CreateStealthScaleEnv(
+		[]tsic.Option{},
+		hsic.WithTestName("clipakresueeph"),
+	)
 	require.NoError(t, err)
 
 	stealthscale, err := scenario.StealthScale()
@@ -356,7 +362,12 @@ func TestPreAuthKeyDeleteCommand(t *testing.T) {
 		assert.NoError(c, err)
 
 		for i := range listed {
-			assert.NotEqual(c, created.Id, listed[i].Id, "deleted key should not be listed")
+			assert.NotEqual(
+				c,
+				created.Id,
+				listed[i].Id,
+				"deleted key should not be listed",
+			)
 		}
 	}, integrationutil.ScaledTimeout(10*time.Second), integrationutil.FastPoll, "Waiting for preauth key list after delete")
 }
@@ -375,10 +386,42 @@ func TestPreAuthKeyCommandValidation(t *testing.T) {
 		args    []string
 		wantErr string
 	}{
-		{name: "create malformed tag", args: []string{"preauthkeys", "--user", "1", "create", "--tags", "notatag", "--output", "json"}},
-		{name: "create nonexistent user", args: []string{"preauthkeys", "--user", "99999", "create", "--output", "json"}},
-		{name: "expire missing id", args: []string{"preauthkeys", "expire"}, wantErr: "missing --id parameter"},
-		{name: "delete missing id", args: []string{"preauthkeys", "delete"}, wantErr: "missing --id parameter"},
+		{
+			name:    "create malformed tag",
+			args:    []string{
+				"preauthkeys",
+				"--user",
+				"1",
+				"create",
+				"--tags",
+				"notatag",
+				"--output",
+				"json",
+			},
+			wantErr: "",
+		},
+		{
+			name:    "create nonexistent user",
+			args:    []string{
+				"preauthkeys",
+				"--user",
+				"99999",
+				"create",
+				"--output",
+				"json",
+			},
+			wantErr: "",
+		},
+		{
+			name:    "expire missing id",
+			args:    []string{"preauthkeys", "expire"},
+			wantErr: "missing --id parameter",
+		},
+		{
+			name:    "delete missing id",
+			args:    []string{"preauthkeys", "delete"},
+			wantErr: "missing --id parameter",
+		},
 	}
 
 	for _, tt := range tests {

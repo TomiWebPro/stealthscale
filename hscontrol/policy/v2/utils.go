@@ -13,15 +13,23 @@ import (
 
 // Port parsing errors.
 var (
-	ErrInputMissingColon      = errors.New("input must contain a colon character separating destination and port")
+	ErrInputMissingColon = errors.New(
+		"input must contain a colon character separating destination and port",
+	)
 	ErrInputStartsWithColon   = errors.New("input cannot start with a colon character")
 	ErrInputEndsWithColon     = errors.New("input cannot end with a colon character")
 	ErrInvalidPortRangeFormat = errors.New("invalid port range format")
-	ErrPortRangeInverted      = errors.New("invalid port range: first port is greater than last port")
-	ErrPortMustBePositive     = errors.New("first port must be >0, or use '*' for wildcard")
-	ErrInvalidPortNumber      = errors.New("invalid first integer")
-	ErrPortNumberOutOfRange   = errors.New("port number out of range")
-	ErrBracketsNotIPv6        = errors.New("square brackets are only valid around IPv6 addresses")
+	ErrPortRangeInverted      = errors.New(
+		"invalid port range: first port is greater than last port",
+	)
+	ErrPortMustBePositive = errors.New(
+		"first port must be >0, or use '*' for wildcard",
+	)
+	ErrInvalidPortNumber    = errors.New("invalid first integer")
+	ErrPortNumberOutOfRange = errors.New("port number out of range")
+	ErrBracketsNotIPv6      = errors.New(
+		"square brackets are only valid around IPv6 addresses",
+	)
 )
 
 // splitDestinationAndPort takes an input string and returns the destination and port as a tuple, or an error if the input is invalid.

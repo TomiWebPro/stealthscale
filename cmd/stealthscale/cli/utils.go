@@ -14,21 +14,21 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v5"
+	"github.com/prometheus/common/model"
+	"github.com/pterm/pterm"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
 	clientv1 "github.com/tomiwebpro/stealthscale/gen/client/v1"
 	"github.com/tomiwebpro/stealthscale/hscontrol"
 	"github.com/tomiwebpro/stealthscale/hscontrol/types"
 	"github.com/tomiwebpro/stealthscale/hscontrol/util"
 	"github.com/tomiwebpro/stealthscale/hscontrol/util/zlog/zf"
-	"github.com/prometheus/common/model"
-	"github.com/pterm/pterm"
-	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
 const (
 	StealthScaleDateTimeFormat = "2006-01-02 15:04:05"
-	SocketWritePermissions  = 0o666
+	SocketWritePermissions     = 0o666
 
 	outputFormatJSON     = "json"
 	outputFormatJSONLine = "json-line"
@@ -36,7 +36,9 @@ const (
 )
 
 var (
-	errAPIKeyNotSet     = errors.New("STEALTHSCALE_CLI_API_KEY environment variable needs to be set")
+	errAPIKeyNotSet = errors.New(
+		"STEALTHSCALE_CLI_API_KEY environment variable needs to be set",
+	)
 	errMissingParameter = errors.New("missing parameters")
 	errResponseStatus   = errors.New("unexpected response status")
 )
@@ -47,7 +49,12 @@ var (
 // message text is not lost.
 func apiError(statusCode int, problem *clientv1.ErrorModel) error {
 	if problem == nil {
-		return fmt.Errorf("%w: %d %s", errResponseStatus, statusCode, http.StatusText(statusCode))
+		return fmt.Errorf(
+			"%w: %d %s",
+			errResponseStatus,
+			statusCode,
+			http.StatusText(statusCode),
+		)
 	}
 
 	parts := make([]string, 0, 2)
@@ -69,7 +76,12 @@ func apiError(statusCode int, problem *clientv1.ErrorModel) error {
 	}
 
 	if len(parts) == 0 {
-		return fmt.Errorf("%w: %d %s", errResponseStatus, statusCode, http.StatusText(statusCode))
+		return fmt.Errorf(
+			"%w: %d %s",
+			errResponseStatus,
+			statusCode,
+			http.StatusText(statusCode),
+		)
 	}
 
 	return fmt.Errorf("%w: %s", errResponseStatus, strings.Join(parts, ": "))
@@ -167,7 +179,10 @@ func newStealthScaleCLIWithConfig() (context.Context, *clientv1.ClientWithRespon
 			return nil, nil, nil, err
 		}
 
-		log.Trace().Caller().Str(zf.Address, cfg.UnixSocket).Msg("connecting via unix socket")
+		log.Trace().
+			Caller().
+			Str(zf.Address, cfg.UnixSocket).
+			Msg("connecting via unix socket")
 
 		return ctx, client, cancel, nil
 	}
@@ -203,7 +218,11 @@ func newSocketClient(socketPath string) (*clientv1.ClientWithResponses, error) {
 		// Probe for a clearer permission error up front. [os.OpenFile] on a unix
 		// socket returns ENXIO on Linux (expected); only permission errors are
 		// actionable. The real connection goes through [net.Dial].
-		socket, err := os.OpenFile(socketPath, os.O_WRONLY, SocketWritePermissions) //nolint
+		socket, err := os.OpenFile(
+			socketPath,
+			os.O_WRONLY,
+			SocketWritePermissions,
+		) //nolint
 		if err != nil {
 			if os.IsPermission(err) {
 				return nil, fmt.Errorf(
@@ -261,7 +280,10 @@ func clientBaseURL(address string) string {
 // newRemoteClient builds an API client for a remote StealthScale over HTTPS,
 // honouring insecure (skip TLS verification) and injecting the API key as a
 // bearer token on every request.
-func newRemoteClient(address, apiKey string, insecure bool) (*clientv1.ClientWithResponses, error) {
+func newRemoteClient(
+	address, apiKey string,
+	insecure bool,
+) (*clientv1.ClientWithResponses, error) {
 	transport := &http.Transport{}
 	if insecure {
 		transport.TLSClientConfig = &tls.Config{
@@ -339,6 +361,19 @@ func expirationFromFlag(cmd *cobra.Command) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("parsing duration: %w", err)
 	}
 
+	// "0" parses as a zero duration and would mint a key whose
+	// expiration is time.Now() — dead on arrival the moment the node
+	// authenticates. Refuse locally instead of shipping an
+	// immediately-expired key to the server (the server only maps an
+	// omitted/zero body field to "never expires"; an explicit near-now
+	// timestamp sails straight through).
+	if duration <= 0 {
+		return time.Time{}, fmt.Errorf(
+			"%w: expiration must be a positive duration, got %q",
+			errMissingParameter, durationStr,
+		)
+	}
+
 	return time.Now().UTC().Add(time.Duration(duration)), nil
 }
 
@@ -400,6 +435,7 @@ func printError(err error, outputFormat string) {
 
 func hasMachineOutputFlag() bool {
 	return slices.ContainsFunc(os.Args, func(arg string) bool {
-		return arg == outputFormatJSON || arg == outputFormatJSONLine || arg == outputFormatYAML
+		return arg == outputFormatJSON || arg == outputFormatJSONLine ||
+			arg == outputFormatYAML
 	})
 }
