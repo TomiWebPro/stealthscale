@@ -161,6 +161,30 @@ func TestParseVLESSRequestSkipsAddons(t *testing.T) {
 	assert.Equal(t, []byte("rest-of-stream"), got)
 }
 
+// TestParseVLESSRequestRejectsLongAddons is a failure-mode test: when an
+// attacker or buggy client claims more addon bytes than are actually present
+// on the wire, ParseVLESSRequest must fail cleanly rather than blocking
+// indefinitely waiting for data that will never arrive (which would stall
+// the HTTP/2 stream and waste a goroutine).
+func TestParseVLESSRequestRejectsLongAddons(t *testing.T) {
+	t.Parallel()
+
+	nodeID := types.NodeID(99)
+	u, err := uuid.FromString(NodeUUID(nodeID, ""))
+	require.NoError(t, err)
+
+	// Build header with addons length = 255 but only provide 10 actual bytes.
+	data := make([]byte, 0, 1+vlessUUIDLen+1+10)
+	data = append(data, 0)                                    // version
+	data = append(data, u.Bytes()...)                          // UUID
+	data = append(data, 255)                                   // addons len = 255
+	data = append(data, []byte("only-ten-bytes")[:10]...)     // short payload
+
+	_, _, err = ParseVLESSRequest(bytes.NewReader(data))
+	assert.Error(t, err, "oversized addon claim should return an error")
+	assert.Contains(t, err.Error(), "addons", "error must mention addons so callers can distinguish from other failures")
+}
+
 func testXRayConfig() types.XRayConfig {
 	return types.XRayConfig{
 		Enabled:        true,
