@@ -1802,6 +1802,7 @@ Format:
 - HEAD at push: `98c22ca`
 
 ## 2026-10-24 22:00 UTC — ss-maintain
+
 - concurrency guard: /tmp/ss/agent.lock held by "ss-maintain 2026-10-24T00:00 UTC" (modified < 15 min ago — skipped per protocol)
 - issues filed: none | issues closed: none
 - commit: no commit
@@ -1816,3 +1817,30 @@ Format:
 - issues filed: none (open/ empty; overview.md claims verified against code — Web UI management parity, VLESS stealth transport, DERP fail-closed, VLESS bootstrap, unified client/coordinator all match current status. CLI flow (`stscale up --node-id`, `nodes vless --one-line`) matches documentation — no copy-paste friction discovered.) | issues closed: none
 - trivial fixes: none needed (all identified bugs already fixed)
 - commit: pending (xray_test.go only; per protocol, if only adding to DEVLOG skip commit — but here adding test file so commit is warranted)
+
+## 2026-10-25 10:10 UTC — ss-maintain
+
+- concurrency guard: passed (no lock held); wrote "ss-maintain 2026-10-25 10:07 UTC" to /tmp/ss/agent.lock, removed at end of cycle
+- build: GOTOOLCHAIN=go1.26.7 go build ./... green
+- tests: GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/... all pass
+- test added: hscontrol/derp/derp_merge_failure_test.go — 5 failure-mode tests for mergeDERPMaps: nil entry handling, empty region sets, last-wins overlay semantics, unaffected region preservation, non-nil always guarantee
+- bug found + fixed: hscontrol/derp/derp.go mergeDERPMaps panicked on nil entries in the input slice (line 84: range derpMap.Regions on nil). A failed config load that returns nil would crash the DERP subsystem instead of gracefully skipping. Added nil guard (continue) before dereferencing. Regression-test: one test deliberately passes nil to confirm the panic is avoided.
+- issue filing: none (overview.md verified against code — Web UI management parity, VLESS stealth transport, DERP fail-closed, VLESS bootstrap, unified client/coordinator all match status claims; no unfiled promised-feature gaps) | issues closed: none
+- commit: df23d40
+
+Format:
+
+```
+## <YYYY-MM-DD HH:MM UTC> — <job name>
+- what was done / found / committed (with short hashes) / issues filed or closed
+```
+
+## 2026-10-25 19:00 UTC — ss-maintain
+
+- concurrency guard: passed (no lock held); wrote "ss-maintain 2026-10-25 19:00 UTC" to /tmp/ss/agent.lock
+- build: GOTOOLCHAIN=go1.26.7 go build ./... green
+- tests: GOTOOLCHAIN=go1.26.7 go test -short -count=1 ./hscontrol/... ./cmd/... all pass (ALL PASS; baseline + new tests)
+- test added: hscontrol/state/maprequest_hostinfo_changes_test.go — three failure-point tests for the critical MapRequest hot-path (state.UpdateNodeFromMapRequest): (1) TestMapRequestHostinfoHostnameChangeTriggersPersist: a hostname-only change must trigger at least one nodes-table UPDATE via the GORM callback interceptor, confirming that non-endpoint hostinfo drift is not suppressed as a no-op; (2) TestMapRequestStaleKeepaliveDoesNotPersist: an identical re-send of established state bypasses the database (nodeUpdateCount stays 0), verifying the persistWorthy fast path; (3) TestHostinfoEqualWithNilFields: pins hostinfoEqual across four null-pointer quadrants (invalid+nil, invalid+valid, valid+nil, valid+valid) — this function gates persistWorthy so mis-classification would silently corrupt DB-write decisions. Verified failing on unfixed code (removed noop guard → stale keepalive writes DB; forced mismatch → name-change no longer detected). Fast (~0.2s total for all three).
+- bug hunting: reviewed recent commits (df23d40 derp mergeDERPMaps nil guard, 6be2a3e xray VLESS oversized addon, 1012aaf util/dns ValidateUsername) — all correct; batcher_concurrency_test.go BUG comments reference removed batcher_lockfree.go (obsolete per earlier cycles); auth_test.go BUG markers confirmed stale from prior cycles; golangci-lint --new-from-rev=HEAD~1 clean on changed files
+- issues filed: none | issues closed: none
+- commit: 1e8c22f
