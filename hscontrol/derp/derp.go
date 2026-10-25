@@ -78,6 +78,9 @@ func mergeDERPMaps(derpMaps []*tailcfg.DERPMap) *tailcfg.DERPMap {
 	}
 
 	for _, derpMap := range derpMaps {
+		if derpMap == nil {
+			continue // skip failed-load sources rather than panicking
+		}
 		// Clone each region: copying the pointer would let a later in-place
 		// shuffle alias regions shared with the source map or a previously
 		// served map, racing concurrent readers.
